@@ -15,6 +15,28 @@ function instance(ctx) {
 }
 
 session = await joinSession({
+    tools: [
+        {
+            name: "markdown_comments_resolve_comment",
+            description: "Resolve a Markdown canvas comment after completing and verifying its requested file edit. Never resolve blocked or unfinished feedback.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: { type: "string", description: "Absolute Markdown file path from the review request." },
+                    commentId: { type: "string", description: "Comment ID from the review request." },
+                },
+                required: ["path", "commentId"],
+                additionalProperties: false,
+            },
+            handler: async ({ path, commentId }) => {
+                try {
+                    return JSON.stringify(await store.complete(path, commentId));
+                } catch (error) {
+                    return { resultType: "failure", textResultForLlm: error.message };
+                }
+            },
+        },
+    ],
     canvases: [
         createCanvas({
             id: "markdown-comments",

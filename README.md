@@ -9,8 +9,12 @@ comment, and send a contextual edit request to the **current Copilot conversatio
 - Rendered Markdown: headings, tables, links, lists, code, and Mermaid diagrams.
 - Selection-based custom feedback and configurable one-click feedback:
   **Fix this slop**, **Provide more context**, and **Rewrite**.
-- A comment sidebar, text-range highlights, and resolve/reopen controls.
-  Click a comment to scroll to its original passage in the same revision.
+- Word-style margin balloons beside the passage or diagram, with connector
+  lines, linked text highlights, and collision avoidance.
+- A floating **New comment** control at the selection, plus **Ctrl+Alt+M**
+  (or **Cmd+Option+M**) to open a focused comment box beside that passage.
+- Posted comments stay visible until Copilot explicitly resolves them after
+  editing. Resolved comments are hidden, not deleted, and can be reopened.
 - Per-document comments that survive canvas reloads and extension restarts.
 - Automatic preview updates after file changes, with stale-selection protection.
 - Local, bundled rendering: no CDN calls or remote image fetching.
@@ -48,18 +52,29 @@ The canvas ID is `markdown-comments`; its open input is
 
 ## Review workflow
 
-1. Select a passage in the rendered document.
-2. Choose a standard feedback button, or type custom feedback and send it.
+1. Select a passage in the rendered document, then choose **New comment** near
+   the selection, or press **Ctrl+Alt+M**.
+2. In the comment balloon beside that passage, choose a standard feedback
+   button, or type custom feedback and choose **Post comment**.
 3. Copilot receives the file path, selected rendered quote, source block's line
    range and Markdown, file revision, and feedback. You do not need to identify
    the section again in chat.
-4. Review the resulting file changes. Resolve the comment when satisfied.
+4. The comment stays beside the text while Copilot works. After making and
+   verifying the edit, Copilot resolves it and its balloon disappears.
+   **Show resolved** reveals completed comments; **Reopen** restores one.
 
-Use **Comment on diagram** to target the complete Mermaid source block. SVG
+Use **Comment on diagram** to open a comment balloon beside that diagram and
+target the complete Mermaid source block. SVG
 label selections are deliberately not treated as editable source ranges.
 Feedback across formatted text or multiple paragraphs retains the rendered
 quote and enclosing source blocks rather than pretending rendered character
 offsets are raw Markdown offsets.
+
+Click highlighted text to focus its comment, or a comment to return to its
+passage. Comments move with their anchors when the document is resized;
+overlapping balloons stack without covering each other. Narrow views retain
+the document and comment margin side by side with horizontal scrolling.
+**Cancel** or **Escape** discards an unposted comment.
 
 **Sent** means the runtime accepted the message, not that an edit succeeded.
 Feedback is queued in the current conversation so it does not interrupt an
@@ -71,7 +86,15 @@ The preview polls disk every two seconds while visible. Auto-refresh pauses
 while a passage is selected so typing a comment does not lose its context.
 If the file changed, sending is rejected; use **Refresh** and select it again.
 Comments on earlier revisions keep their original quote and are labeled as
-outdated rather than silently reanchored to possibly different text.
+outdated if their text changed or is ambiguous. An unchanged quote can reattach
+when its text and surrounding context identify exactly one passage. An unlinked
+comment stays visible near its previous position until Copilot resolves it;
+the preview does not infer completion from file changes or model inactivity.
+
+The agent tool `markdown_comments_resolve_comment` takes `path` and `commentId`
+from the feedback request. Copilot is instructed to call it only after making
+and verifying the requested edit, and to leave blocked or failed work open.
+The tool rejects resolution if delivery failed or the document has not changed.
 
 ## Configure feedback
 

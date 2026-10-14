@@ -181,7 +181,8 @@ export class ReviewStore {
                     renderedSelection: { documentStart: startOffset, documentEnd: endOffset, ...anchor },
                     sourceExcerpt: lines.slice(startLine, endLine).join("\n"), feedback: instruction,
                 }, null, 2),
-                "Make the requested edit using your normal file tools and permission flow. Summarize what changed. The canvas refreshes from disk automatically.",
+                "Make the requested edit using your normal file tools and permission flow. Verify the edit, then call markdown_comments_resolve_comment with the path and commentId above. This removes the comment balloon from the canvas.",
+                "Do not resolve the comment merely because you received it or started working. If blocked, unsuccessful, or awaiting clarification, leave it unresolved. Summarize what changed. The canvas refreshes from disk automatically.",
             ].join("\n\n");
             try {
                 comment.messageId = await this.send(prompt);
@@ -197,13 +198,28 @@ export class ReviewStore {
         });
     }
 
-    async resolve(path, input) {
+    async complete(path, commentId) {
+        const doc = await this.document(path);
+        return this.resolve(doc.path, { id: commentId, resolved: true }, { byAgent: true });
+    }
+
+    async resolve(path, input, { byAgent = false } = {}) {
         return this.locked(path, async () => {
             if (typeof input.id !== "string" || typeof input.resolved !== "boolean") throw new ReviewError("A comment id and resolved boolean are required.");
             const comments = await this.comments(path);
             const comment = comments.find((item) => item.id === input.id);
             if (!comment) throw new ReviewError("Comment not found.", 404);
+            if (byAgent && !comment.resolved) {
+                if (comment.status !== "sent") throw new ReviewError("Cannot complete feedback whose delivery was not confirmed.", 409);
+                if ((await this.document(path)).revision === comment.revision) throw new ReviewError("The document is unchanged. Make and verify the requested edit before resolving its comment.", 409);
+                comment.resolvedBy = "copilot";
+                comment.resolvedAt = new Date().toISOString();
+            }
             comment.resolved = input.resolved;
+            if (!input.resolved) {
+                delete comment.resolvedBy;
+                delete comment.resolvedAt;
+            }
             await this.save(path, comment);
             return comment;
         });

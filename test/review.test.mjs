@@ -106,6 +106,31 @@ test("includes rendered offsets and nearby context to distinguish repeated words
     assert.deepEqual((await f.store.comments(f.path))[0].anchor, anchor);
 });
 
+test("only explicit Copilot completion after an edit resolves a sent comment", async (t) => {
+    const f = await fixture(t);
+    const comment = await f.store.submit(f.path, f.input);
+    await assert.rejects(f.store.complete(f.path, comment.id), /document is unchanged/);
+    await writeFile(f.path, f.source.replace("formatted", "clear"));
+    assert.equal((await f.store.comments(f.path))[0].resolved, false);
+    await f.store.complete(f.path, comment.id);
+    const completed = (await f.store.comments(f.path))[0];
+    assert.equal(completed.resolved, true);
+    assert.equal(completed.resolvedBy, "copilot");
+    assert.ok(completed.resolvedAt);
+    await f.store.complete(f.path, comment.id);
+    await f.store.resolve(f.path, { id: comment.id, resolved: false });
+    assert.equal((await f.store.comments(f.path))[0].resolvedBy, undefined);
+});
+
+test("failed delivery cannot be completed as if Copilot handled it", async (t) => {
+    const f = await fixture(t, async () => { throw new Error("Disconnected"); });
+    await assert.rejects(f.store.submit(f.path, f.input));
+    const [comment] = await f.store.comments(f.path);
+    await writeFile(f.path, "Some unrelated change.");
+    await assert.rejects(f.store.complete(f.path, comment.id), /delivery was not confirmed/);
+    assert.equal((await f.store.comments(f.path))[0].resolved, false);
+});
+
 test("HTTP endpoints require a secret URL and same-origin JSON writes", async (t) => {
     const f = await fixture(t);
     const entry = await startServer({ path: f.path, store: f.store });

@@ -12,21 +12,32 @@
         <button id="refresh" type="button">Refresh</button>
     </header>
     <p id="notice" role="status" aria-live="polite">Loading document...</p>
-    <main>
+    <div id="selection-toolbar" role="toolbar" aria-label="Selected text" hidden>
+        <button id="new-comment" type="button" aria-keyshortcuts="Control+Alt+m Meta+Alt+m">New comment</button>
+    </div>
+    <main id="review-surface">
         <article id="document" aria-label="Rendered Markdown"></article>
-        <aside aria-label="Document comments">
-            <section id="composer">
-                <h2>Comment on a passage</h2>
-                <p class="hint">Select text in the document, then choose feedback or write your own. For diagrams, use "Comment on diagram".</p>
-                <blockquote id="selection">No passage selected.</blockquote>
-                <div id="presets" aria-label="Standard feedback"></div>
+        <svg id="connectors" aria-hidden="true"></svg>
+        <aside id="margin" aria-label="Document comments">
+            <div class="margin-heading">
+                <h2>Comments <span id="count"></span></h2>
+                <button id="show-resolved" type="button" aria-pressed="false" hidden>Show resolved</button>
+            </div>
+            <p id="empty-comments" class="hint">Select text, then choose <strong>New comment</strong> or press <kbd>Ctrl+Alt+M</kbd>. Your comment appears beside that passage.</p>
+            <section id="composer" class="comment draft" aria-label="New comment" hidden>
+                <div class="comment-heading"><span class="avatar" aria-hidden="true">Y</span><div><strong>You</strong><small>New comment</small></div></div>
+                <blockquote id="selection"></blockquote>
                 <form id="feedback-form">
                     <label for="feedback">Custom feedback</label>
-                    <textarea id="feedback" maxlength="8000" rows="4" placeholder="Tell Copilot what to change..."></textarea>
-                    <button id="send" type="submit" disabled>Send to Copilot</button>
+                    <textarea id="feedback" maxlength="8000" rows="3" placeholder="Tell Copilot what to change..."></textarea>
+                    <div id="presets" aria-label="Standard feedback"></div>
+                    <p class="hint">Posting a comment asks Copilot to edit this passage.</p>
+                    <div class="comment-actions">
+                        <button id="cancel-comment" type="button">Cancel</button>
+                        <button id="send" class="primary" type="submit" disabled>Post comment</button>
+                    </div>
                 </form>
             </section>
-            <h2>Comments <span id="count"></span></h2>
             <div id="comments"></div>
         </aside>
     </main>
