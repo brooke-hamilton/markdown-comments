@@ -1,0 +1,19 @@
+{
+  "prompts": [
+    {
+      "id": "fix-slop",
+      "label": "Fix this slop",
+      "prompt": "Remove generic filler, hype, repetition, and vague claims. Rewrite this passage as precise, concrete prose while preserving its factual meaning."
+    },
+    {
+      "id": "more-context",
+      "label": "Provide more context",
+      "prompt": "Add the background, definitions, and relevant explanation a reader needs to understand this passage. Do not invent facts; flag information that needs verification."
+    },
+    {
+      "id": "rewrite",
+      "label": "Rewrite",
+      "prompt": "Rewrite this passage for clarity, concision, and natural language. Preserve its meaning and match the document's tone."
+    }
+  ]
+}
