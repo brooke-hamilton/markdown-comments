@@ -63,6 +63,12 @@ The canvas ID is `markdown-comments`; its open input is
    verifying the edit, Copilot resolves it and its balloon disappears.
    **Show resolved** reveals completed comments; **Reopen** restores one.
 
+Chat shows a compact summary with the document name, source line or line range,
+and your feedback. For standard feedback buttons it shows the preset label.
+The SDK's `displayPrompt` keeps the full instructions and JSON context out of
+the visible chat message while still sending them to Copilot. The summary is
+not an expandable JSON block, and existing chat messages are unchanged.
+
 Use **Comment on diagram** to open a comment balloon beside that diagram and
 target the complete Mermaid source block. SVG
 label selections are deliberately not treated as editable source ranges.

@@ -5,7 +5,7 @@ import { ReviewStore } from "./review.mjs";
 const servers = new Map();
 let session;
 const store = new ReviewStore({
-    send: (prompt) => session.send({ prompt }),
+    send: (prompt, displayPrompt) => session.send({ prompt, displayPrompt }),
 });
 
 function instance(ctx) {

@@ -184,8 +184,11 @@ export class ReviewStore {
                 "Make the requested edit using your normal file tools and permission flow. Verify the edit, then call markdown_comments_resolve_comment with the path and commentId above. This removes the comment balloon from the canvas.",
                 "Do not resolve the comment merely because you received it or started working. If blocked, unsuccessful, or awaiting clarification, leave it unresolved. Summarize what changed. The canvas refreshes from disk automatically.",
             ].join("\n\n");
+            const firstLine = startLine + 1;
+            const lineRange = firstLine === endLine ? String(firstLine) : `${firstLine}-${endLine}`;
+            const displayPrompt = `Markdown comment - ${basename(doc.path)}:${lineRange}\n\n${input.promptId !== undefined ? label : instruction}`;
             try {
-                comment.messageId = await this.send(prompt);
+                comment.messageId = await this.send(prompt, displayPrompt);
                 comment.status = "sent";
             } catch (error) {
                 comment.status = "failed";

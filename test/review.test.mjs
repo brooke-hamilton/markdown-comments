@@ -59,6 +59,48 @@ test("uses configured presets and reloads configuration from disk", async (t) =>
     await assert.rejects(f.store.submit(f.path, { ...f.input, promptId: "rewrite" }), /no longer exists/);
 });
 
+test("shows a compact custom-feedback summary while preserving full model context", async (t) => {
+    let sent;
+    const f = await fixture(t, async (prompt, displayPrompt) => {
+        sent = { prompt, displayPrompt };
+        return "message";
+    });
+    const comment = await f.store.submit(f.path, f.input);
+    assert.equal(sent.displayPrompt, "Markdown comment - doc.md:3\n\nMake this clearer.");
+    assert.doesNotMatch(sent.displayPrompt, /sourceExcerpt|commentId|revision|formatted/);
+    assert.ok(sent.prompt.includes(comment.id));
+    assert.ok(sent.prompt.includes(f.state.revision));
+    assert.ok(sent.prompt.includes(f.path.replaceAll("\\", "\\\\")));
+    assert.match(sent.prompt, /A \*\*formatted\*\* passage/);
+    assert.match(sent.prompt, /Make this clearer/);
+    assert.match(sent.prompt, /markdown_comments_resolve_comment/);
+});
+
+test("shows the preset label in chat, not its expanded model instruction", async (t) => {
+    let sent;
+    const f = await fixture(t, async (prompt, displayPrompt) => {
+        sent = { prompt, displayPrompt };
+        return "message";
+    });
+    await f.store.submit(f.path, { ...f.input, promptId: "rewrite" });
+    assert.equal(sent.displayPrompt, "Markdown comment - doc.md:3\n\nRewrite");
+    assert.match(sent.prompt, /Rewrite clearly\./);
+});
+
+test("shows the inclusive source line range for a diagram comment", async (t) => {
+    let summary;
+    const f = await fixture(t, async (_prompt, displayPrompt) => { summary = displayPrompt; return "message"; });
+    const source = "# Diagram\n\n```mermaid\nflowchart LR\nA-->B\n```\n";
+    await writeFile(f.path, source);
+    const state = await f.store.state(f.path);
+    const quote = source.split("\n").slice(2, 6).join("\n");
+    await f.store.submit(f.path, {
+        ...f.input, revision: state.revision, kind: "diagram",
+        quote, startLine: 2, endLine: 6, startOffset: 0, endOffset: quote.length,
+    });
+    assert.equal(summary, "Markdown comment - doc.md:3-6\n\nMake this clearer.");
+});
+
 test("rejects stale revisions and invalid selections without dispatch", async (t) => {
     let count = 0;
     const f = await fixture(t, async () => { count++; return "sent"; });
