@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReviewStore, renderDocument, validateConfig } from "../review.mjs";
@@ -120,15 +120,20 @@ test("saves delivery failures rather than pretending the model accepted feedback
     assert.equal(comments[0].error, "Disconnected");
 });
 
-test("serializes concurrent comment writes and persists resolve/reopen", async (t) => {
+test("serializes concurrent comment writes and persists explicit reopening as a new attempt", async (t) => {
     const f = await fixture(t);
     await Promise.all([f.store.submit(f.path, f.input), f.store.submit(f.path, f.input)]);
     const comments = await f.store.comments(f.path);
     assert.equal(comments.length, 2);
     await f.store.resolve(f.path, { id: comments[0].id, resolved: true });
     assert.equal((await f.store.comments(f.path))[0].resolved, true);
-    await f.store.resolve(f.path, { id: comments[0].id, resolved: false });
-    assert.equal((await f.store.comments(f.path))[0].resolved, false);
+    const reopened = await f.store.reopen(f.path, { id: comments[0].id, selection: { ...f.input, kind: "text" } });
+    assert.notEqual(reopened.id, comments[0].id);
+    assert.equal(reopened.resolved, false);
+    const original = (await f.store.comments(f.path)).find((comment) => comment.id === comments[0].id);
+    assert.equal(original.resolved, true);
+    assert.equal(original.reopenedAs, reopened.id);
+    await assert.rejects(f.store.resolve(f.path, { id: original.id, resolved: false }), /Use Reopen/);
 });
 
 test("independent session providers do not overwrite each other's comments", async (t) => {
@@ -160,8 +165,131 @@ test("only explicit Copilot completion after an edit resolves a sent comment", a
     assert.equal(completed.resolvedBy, "copilot");
     assert.ok(completed.resolvedAt);
     await f.store.complete(f.path, comment.id);
-    await f.store.resolve(f.path, { id: comment.id, resolved: false });
-    assert.equal((await f.store.comments(f.path))[0].resolvedBy, undefined);
+    const current = await f.store.state(f.path);
+    const reopened = await f.store.reopen(f.path, {
+        id: comment.id, retarget: true,
+        selection: { ...f.input, revision: current.revision, quote: "clear", endOffset: 14 },
+    });
+    assert.equal(reopened.resolvedBy, undefined);
+    const original = (await f.store.comments(f.path)).find((item) => item.id === comment.id);
+    assert.equal(original.resolvedBy, "copilot");
+    assert.equal(original.resolvedAt, completed.resolvedAt);
+});
+
+test("reopening dispatches updated context once and keeps original preset instructions after configuration changes", async (t) => {
+    const sent = [];
+    const f = await fixture(t, async (prompt, displayPrompt) => { sent.push({ prompt, displayPrompt }); return `message-${sent.length}`; });
+    const original = await f.store.submit(f.path, { ...f.input, promptId: "rewrite" });
+    await writeFile(f.path, `New heading\n\n${f.source}`);
+    await f.store.complete(f.path, original.id);
+    await writeFile(f.configPath, JSON.stringify({ prompts: [] }));
+    const current = await f.store.state(f.path);
+    assert.equal(current.comments[0].canReopen, true);
+    const input = { id: original.id, selection: { ...f.input, kind: "text", revision: current.revision, startLine: 4, endLine: 5, startOffset: 22, endOffset: 31 } };
+    const [reopened, duplicate] = await Promise.all([f.store.reopen(f.path, input), f.store.reopen(f.path, input)]);
+    assert.equal(duplicate.id, reopened.id);
+    assert.equal(sent.length, 2);
+    assert.equal(reopened.previousCommentId, original.id);
+    assert.equal(reopened.revision, current.revision);
+    assert.equal(reopened.instruction, "Rewrite clearly.");
+    assert.equal(reopened.messageId, "message-2");
+    assert.equal(sent[1].displayPrompt, "Markdown comment - doc.md:5\n\nRewrite");
+    assert.match(sent[1].prompt, /"first": 5/);
+    assert.match(sent[1].prompt, /"documentStart": 22/);
+    assert.match(sent[1].prompt, /A \*\*formatted\*\* passage/);
+    assert.ok(sent[1].prompt.includes(current.revision));
+    assert.ok(sent[1].prompt.includes(reopened.id));
+    assert.match(sent[1].prompt, /markdown_comments_resolve_comment/);
+    await assert.rejects(f.store.complete(f.path, original.id), /newer feedback attempt/);
+    await assert.rejects(f.store.complete(f.path, reopened.id), /document is unchanged/);
+    const restarted = new ReviewStore({ send: async () => assert.fail("duplicate dispatch"), storageRoot: join(f.root, "comments"), configPath: f.configPath });
+    assert.equal((await restarted.reopen(f.path, input)).id, reopened.id);
+});
+
+test("changed, ambiguous, and legacy targets require explicit current selection without dispatch", async (t) => {
+    let count = 0;
+    const f = await fixture(t, async () => { count++; return "message"; });
+    const original = await f.store.submit(f.path, f.input);
+    await f.store.resolve(f.path, { id: original.id, resolved: true });
+    for (const source of [f.source.replace("formatted", "clear"), `${f.source}\nA **formatted** passage.\n`]) {
+        await writeFile(f.path, source);
+        const current = await f.store.state(f.path);
+        assert.equal(current.comments[0].canReopen, false);
+        await assert.rejects(f.store.reopen(f.path, { id: original.id, selection: { ...f.input, kind: "text", revision: current.revision } }), /changed or is ambiguous/);
+    }
+    delete original.sourceExcerpt;
+    original.resolved = true;
+    await f.store.save(f.path, original);
+    await writeFile(f.path, `${f.source}\nUnrelated addition.\n`);
+    assert.equal((await f.store.state(f.path)).comments[0].canReopen, false);
+    assert.equal(count, 1);
+    const current = await f.store.state(f.path);
+    const reopened = await f.store.reopen(f.path, {
+        id: original.id, retarget: true, selection: { ...f.input, revision: current.revision, quote: "A repeated passage.", startLine: 4, endLine: 5 },
+    });
+    assert.equal(count, 2);
+    assert.equal(reopened.quote, "A repeated passage.");
+    assert.equal(reopened.instruction, original.instruction);
+});
+
+test("reopen rejects stale selections and already-pending work", async (t) => {
+    const f = await fixture(t);
+    const original = await f.store.submit(f.path, f.input);
+    await assert.rejects(f.store.reopen(f.path, { id: original.id, retarget: true, selection: f.input }), /already awaiting/);
+    await f.store.resolve(f.path, { id: original.id, resolved: true });
+    await writeFile(f.path, `${f.source}\nExternal edit.\n`);
+    await assert.rejects(f.store.reopen(f.path, { id: original.id, retarget: true, selection: f.input }), /document changed/);
+    assert.equal((await f.store.comments(f.path)).length, 1);
+});
+
+test("retry failures persist independently, stay actionable, and cannot be resent through an old parent", async (t) => {
+    let count = 0;
+    const f = await fixture(t, async () => {
+        if (++count === 2) throw new Error("Disconnected");
+        return `message-${count}`;
+    });
+    const original = await f.store.submit(f.path, f.input);
+    await f.store.resolve(f.path, { id: original.id, resolved: true });
+    const input = { id: original.id, selection: { ...f.input, kind: "text" } };
+    await assert.rejects(f.store.reopen(f.path, input), /Disconnected/);
+    const comments = await f.store.comments(f.path);
+    const failed = comments.find((comment) => comment.previousCommentId === original.id);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error, "Disconnected");
+    assert.equal(comments.find((comment) => comment.id === original.id).resolved, true);
+    await assert.rejects(f.store.reopen(f.path, input), /previous retry was not confirmed/);
+    assert.equal(count, 2);
+    const retry = await f.store.reopen(f.path, { ...input, id: failed.id });
+    assert.equal(retry.status, "sent");
+    assert.equal(retry.error, undefined);
+    assert.equal(count, 3);
+});
+
+test("independent providers cannot dispatch the same reopen twice", async (t) => {
+    let count = 0;
+    const send = async () => { count++; await new Promise((resolve) => setTimeout(resolve, 30)); return "message"; };
+    const f = await fixture(t, send);
+    const other = new ReviewStore({ send, storageRoot: join(f.root, "comments"), configPath: f.configPath });
+    const original = await f.store.submit(f.path, f.input);
+    await f.store.resolve(f.path, { id: original.id, resolved: true });
+    const input = { id: original.id, selection: { ...f.input, kind: "text" } };
+    const results = await Promise.allSettled([f.store.reopen(f.path, input), other.reopen(f.path, input)]);
+    assert.ok(results.some((result) => result.status === "fulfilled"));
+    assert.equal(count, 2);
+    assert.equal((await f.store.comments(f.path)).length, 2);
+});
+
+test("pending delivery and interrupted updates remain explicit and cannot duplicate sends", async (t) => {
+    let count = 0;
+    const f = await fixture(t, async () => { count++; return "message"; });
+    const original = await f.store.submit(f.path, f.input);
+    const input = { id: original.id, selection: { ...f.input, kind: "text" } };
+    await f.store.save(f.path, { ...original, status: "pending", resolved: true });
+    await assert.rejects(f.store.reopen(f.path, input), /Delivery is unconfirmed/);
+    await f.store.save(f.path, { ...original, resolved: true });
+    await mkdir(join(f.store.commentsPath(f.path), `${original.id}.lock`));
+    await assert.rejects(f.store.reopen(f.path, input), /update is in progress or was interrupted/);
+    assert.equal(count, 1);
 });
 
 test("failed delivery cannot be completed as if Copilot handled it", async (t) => {
@@ -185,5 +313,16 @@ test("HTTP endpoints require a secret URL and same-origin JSON writes", async (t
     assert.equal((await fetch(`${entry.url}comments`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: "null" })).status, 400);
     const response = await fetch(`${entry.url}comments`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify(f.input) });
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).status, "sent");
+    const original = await response.json();
+    assert.equal(original.status, "sent");
+    await f.store.resolve(f.path, { id: original.id, resolved: true });
+    const reopen = await fetch(`${entry.url}reopen`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: origin },
+        body: JSON.stringify({ id: original.id, selection: { ...f.input, kind: "text" } }),
+    });
+    assert.equal(reopen.status, 200);
+    assert.equal((await reopen.json()).previousCommentId, original.id);
+    assert.equal((await fetch(`${entry.url}reopen`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "https://evil.example" }, body: "{}",
+    })).status, 403);
 });

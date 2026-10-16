@@ -61,7 +61,24 @@ The canvas ID is `markdown-comments`; its open input is
    the section again in chat.
 4. The comment stays beside the text while Copilot works. After making and
    verifying the edit, Copilot resolves it and its balloon disappears.
-   **Show resolved** reveals completed comments; **Reopen** restores one.
+   **Show resolved / history** reveals completed comments and earlier attempts.
+   **Reopen** sends the original feedback again when the passage is still
+   safely linked and its source block is unchanged and unambiguous.
+
+Reopening creates a new comment and delivery attempt; the original quote,
+feedback, and resolution metadata remain in history. The new request includes
+the current revision, current source lines, rendered selection, and original
+feedback, with the same compact chat summary. Editing or deleting a feedback
+preset does not change the instructions of an existing comment.
+
+If the passage changed or is ambiguous, **Reopen** does not send anything.
+Choose **Select current passage**, select the intended text (or use **Comment
+on diagram**), and choose **New comment**. The composer retains the original
+feedback; **Resubmit feedback** confirms the new target. **Cancel** sends nothing.
+Older saved comments without a source snapshot also require this explicit
+selection after the document changes. Already-open comments whose passages
+became unlinked provide the same action instead of implying Copilot can guess
+where to edit.
 
 Chat shows a compact summary with the document name, source line or line range,
 and your feedback. For standard feedback buttons it shows the preset label.
@@ -87,6 +104,14 @@ Feedback is queued in the current conversation so it does not interrupt an
 in-progress turn. Plan mode and permission prompts still apply. Failed delivery
 is displayed and saved; unconfirmed delivery after a crash is shown as pending.
 There is no automatic retry that could accidentally submit a request twice.
+Failed attempts have an explicit **Retry** button. Repeated Reopen requests for
+the same original comment reuse its saved attempt rather than sending twice,
+including across panels and session providers. Pending/unconfirmed attempts
+cannot be retried: check the conversation first. A provider crash during a
+comment update can leave an `artifacts\<document-key>\<comment-id>.lock`
+directory; updates then fail explicitly instead of risking another send.
+Only remove that specific empty lock directory after confirming no provider is
+still updating the comment and checking delivery in the conversation.
 
 The preview polls disk every two seconds while visible. Auto-refresh pauses
 while a passage is selected so typing a comment does not lose its context.
@@ -94,7 +119,7 @@ If the file changed, sending is rejected; use **Refresh** and select it again.
 Comments on earlier revisions keep their original quote and are labeled as
 outdated if their text changed or is ambiguous. An unchanged quote can reattach
 when its text and surrounding context identify exactly one passage. An unlinked
-comment stays visible near its previous position until Copilot resolves it;
+comment stays visible near its previous position with an explicit retarget action;
 the preview does not infer completion from file changes or model inactivity.
 
 The agent tool `markdown_comments_resolve_comment` takes `path` and `commentId`

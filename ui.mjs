@@ -11,6 +11,7 @@ const toolbar = $("#selection-toolbar");
 let state;
 let selected;
 let draftOpen = false;
+let retargetId;
 let activeId;
 let showResolved = false;
 let busy = false;
@@ -39,6 +40,7 @@ function controls() {
     $("#cancel-comment").disabled = busy;
     $("#refresh").disabled = busy;
     for (const button of $("#presets").children) button.disabled = busy || !selected;
+    for (const button of $("#comments").querySelectorAll("button")) button.disabled = busy;
 }
 
 function sourceElement(node) {
@@ -129,6 +131,14 @@ function captureSelection() {
         notice('Use "Comment on diagram" to select a Mermaid diagram.', true);
         return;
     }
+    setSelection(selectionFromRange(range));
+    notice(retargetId ? 'Choose New comment to resubmit the original feedback on this passage.' :
+        "Choose New comment, or press Ctrl+Alt+M, to comment beside this passage.");
+}
+
+function selectionFromRange(range) {
+    const start = sourceElement(range.startContainer);
+    const end = sourceElement(range.endContainer);
     const before = document.createRange();
     before.selectNodeContents(article);
     before.setEnd(range.startContainer, range.startOffset);
@@ -141,7 +151,7 @@ function captureSelection() {
     const blockAfter = document.createRange();
     blockAfter.selectNodeContents(end);
     blockAfter.setStart(range.endContainer, range.endOffset);
-    setSelection({
+    return {
         kind: "text", revision: state.revision, quote, startOffset, endOffset: startOffset + quote.length,
         anchor: {
             startBlockOffset: blockBefore.toString().length,
@@ -150,13 +160,27 @@ function captureSelection() {
         },
         startLine: Math.min(Number(start.dataset.startLine), Number(end.dataset.startLine)),
         endLine: Math.max(Number(start.dataset.endLine), Number(end.dataset.endLine)),
-    });
-    notice("Choose New comment, or press Ctrl+Alt+M, to comment beside this passage.");
+    };
+}
+
+function selectionFor(comment) {
+    const anchor = anchorFor(comment);
+    if (!anchor) return;
+    if (anchor instanceof Range) return selectionFromRange(anchor);
+    const startLine = Number(anchor.dataset.startLine);
+    const endLine = Number(anchor.dataset.endLine);
+    const quote = state.source.split("\n").slice(startLine, endLine).join("\n");
+    return { kind: "diagram", revision: state.revision, quote, startLine, endLine, startOffset: 0, endOffset: quote.length };
 }
 
 function openDraft() {
     if (!selected || busy) return;
     draftOpen = true;
+    const original = state.comments.find((comment) => comment.id === retargetId);
+    $("#feedback").value = original?.instruction ?? "";
+    $("#feedback").readOnly = Boolean(original);
+    $("#presets").hidden = Boolean(original);
+    $("#send").textContent = original ? "Resubmit feedback" : "Post comment";
     activeId = undefined;
     for (const card of $("#comments").children) card.classList.remove("active");
     composer.hidden = false;
@@ -172,6 +196,7 @@ function closeDraft() {
     draftOpen = false;
     composer.hidden = true;
     $("#feedback").value = "";
+    retargetId = undefined;
     setSelection(undefined);
     window.getSelection().removeAllRanges();
     $("#empty-comments").hidden = visibleComments().length > 0;
@@ -189,7 +214,7 @@ document.addEventListener("keydown", (event) => {
             openDraft();
         }
     } else if (event.key === "Escape" && !busy) {
-        if (draftOpen || selected) {
+        if (draftOpen || selected || retargetId) {
             event.preventDefault();
             closeDraft();
         }
@@ -234,12 +259,23 @@ async function send(input) {
     busy = true;
     controls();
     try {
-        const comment = await api("comments", { ...selected, ...input });
+        const comment = retargetId ?
+            await api("reopen", { id: retargetId, retarget: true, selection: selected }) :
+            await api("comments", { ...selected, ...input });
         activeId = comment.id;
         closeDraft();
         await refresh();
         notice("Comment posted and sent to Copilot. The preview updates when the file changes.");
     } catch (error) {
+        if (retargetId) {
+            closeDraft();
+            try {
+                await refresh();
+            } catch (refreshError) {
+                notice(`${error.message} Refresh also failed: ${refreshError.message}`, true);
+                return;
+            }
+        }
         notice(error.message, true);
     } finally {
         busy = false;
@@ -266,7 +302,43 @@ function renderPrompts(prompts) {
 }
 
 function visibleComments() {
-    return (state?.comments ?? []).filter((comment) => showResolved || !comment.resolved);
+    return (state?.comments ?? []).filter((comment) => showResolved || (!comment.resolved && !comment.reopenedAs));
+}
+
+function retarget(comment) {
+    if (busy) return;
+    if (draftOpen) return notice("Post or cancel the current comment before selecting another passage.");
+    closeDraft();
+    retargetId = comment.id;
+    notice("Select the current passage, then choose New comment to resubmit the original feedback. Nothing has been sent yet.");
+}
+
+async function reopen(comment) {
+    if (busy) return;
+    const selection = selectionFor(comment);
+    if (!selection || !comment.canReopen) return retarget(comment);
+    busy = true;
+    controls();
+    renderComments();
+    try {
+        const next = await api("reopen", { id: comment.id, selection });
+        activeId = next.id;
+        await refresh();
+        notice(next.status === "sent" ? "Feedback reopened and sent to Copilot." :
+            "Feedback was not sent. Check its delivery status.", next.status !== "sent");
+    } catch (error) {
+        try {
+            await refresh();
+        } catch (refreshError) {
+            notice(`${error.message} Refresh also failed: ${refreshError.message}`, true);
+            return;
+        }
+        notice(error.message, true);
+    } finally {
+        busy = false;
+        controls();
+        renderComments();
+    }
 }
 
 function activateComment(comment, focus = "passage") {
@@ -289,10 +361,10 @@ function activateComment(comment, focus = "passage") {
 
 function renderComments() {
     const comments = visibleComments();
-    const resolved = state.comments.filter((comment) => comment.resolved).length;
+    const resolved = state.comments.filter((comment) => comment.resolved || comment.reopenedAs).length;
     $("#count").textContent = `(${state.comments.length - resolved} open)`;
     $("#show-resolved").hidden = resolved === 0;
-    $("#show-resolved").textContent = `${showResolved ? "Hide" : "Show"} resolved (${resolved})`;
+    $("#show-resolved").textContent = `${showResolved ? "Hide" : "Show"} resolved / history (${resolved})`;
     $("#show-resolved").setAttribute("aria-pressed", String(showResolved));
     $("#empty-comments").hidden = draftOpen || comments.length > 0;
     $("#comments").replaceChildren(...comments.map((comment) => {
@@ -334,27 +406,35 @@ function renderComments() {
         meta.textContent = `${location} | ${comment.status}`;
         const actions = document.createElement("div");
         actions.className = "comment-actions";
-        if (comment.resolved) {
+        if (comment.reopenedAs) {
+            const history = document.createElement("small");
+            history.textContent = "Preserved history - feedback resubmitted";
+            actions.append(history);
+        } else if (comment.resolved || comment.status === "failed") {
             const button = document.createElement("button");
-            button.textContent = "Reopen";
-            button.addEventListener("click", async () => {
-                button.disabled = true;
-                try {
-                    await api("resolve", { id: comment.id, resolved: false });
-                    await refresh();
-                    notice("Comment reopened.");
-                } catch (error) {
-                    notice(error.message, true);
-                    button.disabled = false;
-                }
-            });
+            button.textContent = comment.resolved ? "Reopen" : "Retry";
+            button.disabled = busy;
+            button.addEventListener("click", () => void reopen(comment));
             actions.append(button);
-        } else {
+        } else if (linked) {
             const waiting = document.createElement("small");
             waiting.textContent = comment.status === "sent" ? "Waiting for Copilot to resolve" : "Not yet resolved";
             actions.append(waiting);
         }
+        let retargetHint;
+        if (!comment.reopenedAs && comment.status !== "pending" && (!linked || !comment.canReopen) &&
+            (comment.resolved || !linked || comment.status === "failed")) {
+            const hint = document.createElement("p");
+            hint.textContent = "Select the current passage to resubmit the original feedback. Copilot will not guess which changed passage to edit.";
+            retargetHint = hint;
+            const button = document.createElement("button");
+            button.textContent = "Select current passage";
+            button.disabled = busy;
+            button.addEventListener("click", () => retarget(comment));
+            actions.append(button);
+        }
         card.append(heading, label, quote, feedback, meta);
+        if (retargetHint) card.append(retargetHint);
         if (comment.error || comment.status === "pending") {
             const error = document.createElement("p");
             error.className = "error";
@@ -386,7 +466,7 @@ function highlightComments() {
         if (anchor instanceof Element) anchor.classList.add("comment-anchor");
     }
     if (!globalThis.CSS?.highlights) return;
-    const ranges = comments.filter((comment) => !comment.resolved).map(commentRange).filter(Boolean);
+    const ranges = comments.filter((comment) => !comment.resolved && !comment.reopenedAs).map(commentRange).filter(Boolean);
     CSS.highlights.set("review-comments", new Highlight(...ranges));
     CSS.highlights.set("review-active", new Highlight(...(activeAnchor instanceof Range ? [activeAnchor] : [])));
     CSS.highlights.set("review-draft", new Highlight(...(draftAnchor instanceof Range ? [draftAnchor] : [])));

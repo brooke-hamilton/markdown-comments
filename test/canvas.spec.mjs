@@ -7,23 +7,32 @@ import { startServer } from "../server.mjs";
 
 let root, path, entry, store, documentNumber = 0;
 const sent = [];
+const summaries = [];
+let sendError;
 const source = "# Test document\n\nA **formatted** passage to improve.\n\nThe second paragraph needs context.\n\n```mermaid\nflowchart LR\n A[Select] --> B[Comment]\n```\n\n<script>window.pwned = true</script>\n";
 
 test.beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "markdown-comments-browser-"));
-    store = new ReviewStore({ send: async (prompt) => { sent.push(prompt); return `message-${sent.length}`; }, storageRoot: join(root, "comments") });
+    store = new ReviewStore({ send: async (prompt, displayPrompt) => {
+        sent.push(prompt);
+        summaries.push(displayPrompt);
+        if (sendError) throw new Error(sendError);
+        return `message-${sent.length}`;
+    }, storageRoot: join(root, "comments") });
 });
 test.afterAll(async () => {
     if (root) await rm(root, { recursive: true, force: true });
 });
 test.beforeEach(async ({ page }) => {
+    sendError = undefined;
     path = join(root, `document-${documentNumber++}.md`);
     await writeFile(path, source);
     entry = await startServer({ path, store });
     await page.goto(entry.url);
     await expect(page.locator("#document svg")).toBeVisible();
 });
-test.afterEach(async () => {
+test.afterEach(async ({ page }) => {
+    await page.close();
     await entry.close();
 });
 
@@ -111,7 +120,17 @@ test("preset comment disappears only after Copilot explicitly completes it", asy
     await page.getByRole("button", { name: /Show resolved/ }).click();
     await expect(page.locator(".comment.resolved")).toHaveCount(1);
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Select the current passage");
+    await expect(page.locator("#comments")).not.toContainText("Waiting for Copilot to resolve");
+    await select(page, "second paragraph");
+    await expect(page.getByLabel("Custom feedback", { exact: true })).toHaveValue(comment.instruction);
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
     await expect(page.locator("#comments")).toContainText("Waiting for Copilot to resolve");
+    expect(summaries.at(-1)).toContain("Provide more context");
+    const retry = (await store.comments(path)).find((item) => item.previousCommentId === comment.id);
+    expect(retry.revision).not.toBe(comment.revision);
+    expect(retry.instruction).toBe(comment.instruction);
+    expect(retry.quote).toBe("second paragraph");
 });
 
 async function assertUnchangedCannotResolve(comment) {
@@ -244,7 +263,8 @@ test("unchanged passages reattach after edits, but edited passages stay visible 
     await writeFile(path, source.replace("formatted", "clearer"));
     await expect(page.locator("#document strong")).toHaveText("clearer", { timeout: 10000 });
     await expect(page.locator("#comments .comment")).toHaveClass(/outdated/);
-    await expect(page.locator("#comments")).toContainText("Waiting for Copilot to resolve");
+    await expect(page.locator("#comments")).not.toContainText("Waiting for Copilot to resolve");
+    await expect(page.getByRole("button", { name: "Select current passage", exact: true })).toBeVisible();
     const after = await page.locator("#comments .comment").boundingBox();
     expect(Math.abs(before.y - after.y)).toBeLessThan(5);
     await expect(page.locator("#connectors path")).toHaveCount(0);
@@ -256,4 +276,132 @@ test("ambiguous repeated passages are not silently reattached", async ({ page })
     await expect(page.locator("#document strong")).toHaveCount(2, { timeout: 10000 });
     await expect(page.locator("#comments .comment")).toHaveClass(/outdated/);
     expect(await page.evaluate(() => CSS.highlights.get("review-comments").size)).toBe(0);
+    await expect(page.getByRole("button", { name: "Select current passage", exact: true })).toBeVisible();
+    await expect(page.locator("#comments")).not.toContainText("Waiting for Copilot to resolve");
+});
+
+test("Reopen actually dispatches an unchanged moved passage with fresh context and preserves resolved history", async ({ page }) => {
+    const original = await post(page);
+    await writeFile(path, `# New introduction\n\n${source}`);
+    await store.complete(path, original.id);
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: /Show resolved/ }).click();
+    const count = sent.length;
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("reopened and sent");
+    expect(sent.length).toBe(count + 1);
+    const comments = await store.comments(path);
+    const retry = comments.find((comment) => comment.previousCommentId === original.id);
+    const history = comments.find((comment) => comment.id === original.id);
+    expect(history.resolved).toBe(true);
+    expect(history.resolvedBy).toBe("copilot");
+    expect(history.reopenedAs).toBe(retry.id);
+    expect(retry.startLine).toBe(4);
+    expect(retry.startOffset).toBeGreaterThan(original.startOffset);
+    expect(sent.at(-1)).toContain(`"revision": "${retry.revision}"`);
+    expect(sent.at(-1)).toContain('"first": 5');
+    expect(summaries.at(-1)).toMatch(/:5\n\nUse a simpler term\./);
+    await expect(page.locator(`#comment-${retry.id}`)).toContainText("Waiting for Copilot to resolve");
+    await expect(page.locator(`#comment-${original.id}`)).toContainText("Preserved history");
+    await expect(page.getByRole("button", { name: "Reopen", exact: true })).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator(`#comment-${retry.id}`)).toBeVisible();
+    expect(sent.length).toBe(count + 1);
+});
+
+test("changed reopened feedback selects a new target explicitly and sends nothing on cancel", async ({ page }) => {
+    const original = await post(page);
+    await writeFile(path, source.replace("formatted", "clearer"));
+    await store.complete(path, original.id);
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: /Show resolved/ }).click();
+    const count = sent.length;
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Nothing has been sent");
+    expect(sent.length).toBe(count);
+    await select(page, "clearer");
+    await expect(page.getByLabel("Custom feedback", { exact: true })).toHaveValue(original.instruction);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(sent.length).toBe(count);
+    await page.getByRole("button", { name: "Select current passage", exact: true }).click();
+    await select(page, "clearer");
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    await expect(page.getByRole("status")).toContainText("posted and sent");
+    expect(sent.length).toBe(count + 1);
+    expect(sent.at(-1)).toContain('"selectedQuote": "clearer"');
+    expect(sent.at(-1)).toContain("A **clearer** passage");
+    expect(sent.at(-1)).toContain(original.instruction);
+});
+
+test("failed reopen shows real delivery errors and exposes an explicit Retry", async ({ page }) => {
+    const original = await post(page);
+    await store.resolve(path, { id: original.id, resolved: true });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: /Show resolved/ }).click();
+    sendError = "Test sender disconnected";
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Could not send");
+    await expect(page.locator("#comments")).toContainText("Test sender disconnected");
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    sendError = undefined;
+    const count = sent.length;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("reopened and sent");
+    expect(sent.length).toBe(count + 1);
+    const comments = await store.comments(path);
+    expect(comments.filter((comment) => !comment.resolved && !comment.reopenedAs)).toHaveLength(1);
+});
+
+test("reopened diagram feedback dispatches its current source range, and changed diagrams require reselection", async ({ page }) => {
+    await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
+    await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    const original = (await store.comments(path))[0];
+    await writeFile(path, `# Introduction\n\n${source}`);
+    await store.complete(path, original.id);
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: /Show resolved/ }).click();
+    const count = sent.length;
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("reopened and sent");
+    expect(sent.length).toBe(count + 1);
+    expect(summaries.at(-1)).toMatch(/:9-12\n\nRewrite/);
+    expect(sent.at(-1)).toContain("A[Select] --> B[Comment]");
+    const retry = (await store.comments(path)).find((comment) => comment.previousCommentId === original.id);
+    await writeFile(path, source.replace("B[Comment]", "B[Feedback]"));
+    await store.complete(path, retry.id);
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    expect(sent.length).toBe(count + 1);
+    await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("posted and sent");
+    expect(sent.length).toBe(count + 2);
+    expect(sent.at(-1)).toContain("B[Feedback]");
+});
+
+test("legacy unlinked feedback is actionable, and stale retarget submissions do not dispatch", async ({ page }) => {
+    const original = await post(page);
+    delete original.sourceExcerpt;
+    await store.save(path, original);
+    await writeFile(path, source.replace("formatted", "clearer"));
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.locator("#comments")).not.toContainText("Waiting for Copilot to resolve");
+    const count = sent.length;
+    await page.getByRole("button", { name: "Select current passage", exact: true }).click();
+    await select(page, "clearer");
+    await writeFile(path, source.replace("formatted", "changed again"));
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("document changed");
+    expect(sent.length).toBe(count);
+    expect(await store.comments(path)).toHaveLength(1);
+    await expect(page.locator("#document strong")).toHaveText("changed again");
+    await page.getByRole("button", { name: "Select current passage", exact: true }).click();
+    await select(page, "changed again");
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("posted and sent");
+    expect(sent.length).toBe(count + 1);
+    expect(sent.at(-1)).toContain(original.instruction);
+    expect(sent.at(-1)).toContain('"selectedQuote": "changed again"');
 });

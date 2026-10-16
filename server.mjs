@@ -48,13 +48,14 @@ export async function startServer({ path, store }) {
                 return res.end(content);
             }
             if (req.method === "GET" && route === "state") return json(200, await store.state(path));
-            if (req.method === "POST" && ["comments", "resolve"].includes(route)) {
+            if (req.method === "POST" && ["comments", "resolve", "reopen"].includes(route)) {
                 if (req.headers.origin !== origin || req.headers["content-type"]?.split(";")[0] !== "application/json") {
                     throw new ReviewError("Same-origin JSON requests are required.", 403);
                 }
                 const input = await body(req);
                 if (!input || typeof input !== "object" || Array.isArray(input)) throw new ReviewError("Expected a JSON object.");
-                return json(200, route === "comments" ? await store.submit(path, input) : await store.resolve(path, input));
+                return json(200, route === "comments" ? await store.submit(path, input) :
+                    route === "reopen" ? await store.reopen(path, input) : await store.resolve(path, input));
             }
             json(404, { error: "Not found." });
         } catch (error) {
