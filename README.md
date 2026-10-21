@@ -171,22 +171,36 @@ trusted system instructions. This extension does not grant tool permissions.
 
 ## Develop
 
+From any source checkout or Copilot worktree, deploy the code currently on disk (including uncommitted changes) into the local Copilot app:
+
 ```powershell
-npm ci
-npm run build
-npm test
-npx playwright install chromium
-npm run test:browser
+npm ci --userconfig "$HOME\.npmrc"
+npm --userconfig "$HOME\.npmrc" run deploy:local
 ```
 
-`npm run check` builds and runs both test suites. Browser tests use a local
-test document and a mock message sender; they do not call a model.
-After changing extension code or rebuilding assets, reload extensions in Copilot.
+Run `npm ci` initially or when dependencies need restoring, not before every deployment. Node.js 22+ is required. The command resolves its source from the script's location, builds the renderer, and runs unit tests before changing the installation. It uses the user-profile root `.npmrc` settings for npm subprocesses.
 
-`extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns
-source mapping, durable comments, configuration, and contextual requests;
-`server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI.
-Agent actions `refresh` and `list_comments` expose the open document's state.
+The destination is `$HOME\.copilot\extensions\markdown-comments`, or `$env:COPILOT_HOME\extensions\markdown-comments` when `COPILOT_HOME` is set. A linked or junction-backed Copilot home is resolved to its physical location. The source and destination must not overlap; run this command from a separate checkout/worktree, not from a clone already inside that installation directory. Symlinks and junctions within the resolved extension destination are rejected.
+
+Deployment copies an explicit set of runtime files, the built renderer, and the sample document. It installs locked production dependencies in a staging directory outside extension discovery and validates them before replacing installed files. The result is a snapshot, not a link: it works after the source worktree is removed. Development tools, source-only files, and source-worktree `artifacts\` are not copied. The installed snapshot is for running the extension, not developing or running npm scripts; keep using the source checkout for those tasks. The runtime supplies `@github/copilot-sdk`; deployment does not install it.
+
+Installed saved comments under `artifacts\` (including comment lock directories) and unrelated files are preserved. Installed `feedback.json` is **replaced** with the worktree's version, so one-click feedback buttons match the code being tested. Replacement failures restore the previous managed files. If rollback itself fails, the command reports the retained recovery directory and deployment lock; do not remove these until recovery is complete. Never remove comment locks or saved data to fix a deployment failure.
+
+After successful deployment, ask Copilot to **reload extensions**, inspect the user-scoped `markdown-comments` provider, then open the absolute sample path printed by the command. Copying files alone does not activate the new provider. Reload immediately after deployment; replacing files is not hot reload, and already-running providers may still be using older code. Other open sessions may each need a reload and canvas reopen. The deployment command does not restart the app or terminate processes to bypass Windows file locks.
+
+For agent-driven testing, the personal skill `bh-test-markdown-comments` runs deployment from the identified source worktree, reloads and inspects the provider, and opens the installed sample using a stable canvas panel. This skill is installed separately in the user's `.copilot\skills\` directory; it is not distributed by this repository or the deployment command. Ask Copilot to “deploy this Markdown comments worktree for testing.” Its smoke test does not post feedback, send a model request, or edit the sample. To test feedback delivery, select a passage and post a comment in the intended conversation yourself.
+
+Browser tests remain separate from deployment:
+
+```powershell
+npm --userconfig "$HOME\.npmrc" run test:browser
+# If Chromium has not been installed:
+npx --userconfig "$HOME\.npmrc" playwright install chromium
+```
+
+`npm run check` builds and runs both test suites. Browser tests use a local test document and a mock message sender; they do not call a model. Build first when running browser tests separately after renderer changes.
+
+`extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns source mapping, durable comments, configuration, and contextual requests; `server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI. Agent actions `refresh` and `list_comments` expose the open document's state.
 
 ## License
 
