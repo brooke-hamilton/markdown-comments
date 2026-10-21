@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { deployLocal, deploymentPaths, installSnapshot, runNpm, runtimeFiles, sourceRoot, validateDestination } from "../scripts/deploy-local.mjs";
 
 async function fixture(t) {
-    const root = await mkdtemp(join(tmpdir(), "markdown deploy test "));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "markdown deploy test ")));
     t.after(() => rm(root, { recursive: true, force: true }));
     const source = join(root, "dirty worktree");
     const home = join(root, "user home");
