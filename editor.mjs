@@ -308,7 +308,7 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
         },
         trackDiagram(comment, revision) {
             const current = snapshot();
-            const matches = diagrams(current).filter((record) => record.source === comment.quote);
+            const matches = diagrams(current).filter((record) => record.source === comment.quote.replace(/\r$/, ""));
             const match = matches.length === 1 ? matches[0] : comment.revision === revision ?
                 matches.find((record) => current.source.slice(0, record.from).split("\n").length - 1 === comment.startLine) : undefined;
             anchors.set(comment.id, match ? { from: match.pos, to: match.pos + match.node.nodeSize } : null);

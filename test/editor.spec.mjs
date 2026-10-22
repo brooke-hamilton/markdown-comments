@@ -474,6 +474,27 @@ test("diagram feedback retries retain their kind and full fence after delivery f
     for (const comment of comments) expect(comment).toMatchObject({ kind: "diagram", quote, sourceExcerpt: quote });
 });
 
+test("previously saved CRLF diagram quotes keep their anchors", async ({ page }) => {
+    const crlf = source.replace(/\n/g, "\r\n");
+    await writeFile(path, crlf);
+    const current = await store.state(path);
+    const quote = crlf.split("\n").slice(6, 10).join("\n");
+    await store.submit(path, {
+        revision: current.revision, kind: "diagram", quote, startLine: 6, endLine: 10,
+        startOffset: 0, endOffset: quote.length, prompt: "Keep this diagram linked.",
+    });
+    await page.reload();
+    await expect(page.locator("#comments .comment")).toBeVisible();
+    await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+    await expect(page.locator("#connectors path")).toHaveCount(1);
+    await append(page);
+    await saved(page);
+    expect(await readFile(path, "utf8")).toBe(crlf.replace("passage to improve.", "passage to improve. Added manually."));
+    await page.reload();
+    await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+    await expect(page.locator("#connectors path")).toHaveCount(1);
+});
+
 test("retarget save failures preserve the composer until autosave is explicitly retried", async ({ page }) => {
     await select(page, "formatted");
     await page.getByRole("button", { name: "Rewrite", exact: true }).click();
