@@ -52,6 +52,12 @@ test("partitions editable Markdown without dropping bytes or unsupported syntax"
     assert.equal(editingBlocks("[ref]: https://example.com\n").blocks[0].raw, true);
     assert.equal(editingBlocks("```html\n<div>Safe code</div>\n```\n").blocks[0].raw, false);
     assert.equal(editingBlocks("```js title=example\nconst value = 1;\n```\n").blocks[0].raw, true);
+    for (const source of ["[label][ref]\n", "[label][]\n", "[outer [inner][ref]\n", "[label] \n [ref]\n"]) {
+        assert.equal(editingBlocks(source).blocks[0].raw, true, source);
+    }
+    for (const source of ["[label](url)\n", "[label][unfinished\n", "[".repeat(32000)]) {
+        assert.equal(editingBlocks(source).blocks[0].raw, false, source);
+    }
 });
 
 test("saves document revisions without changing comments and survives reopening", async (t) => {

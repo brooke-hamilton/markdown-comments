@@ -1,4 +1,4 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx, serializerCtx, schemaCtx, editorViewOptionsCtx } from "@milkdown/kit/core";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx, serializerCtx, schemaCtx, editorViewOptionsCtx, remarkCtx } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
@@ -33,6 +33,8 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
     let tail = editing.tail;
     const anchors = new Map();
     const diagramDecorations = new WeakMap();
+    const diagramIds = new WeakMap();
+    let nextDiagramId = 0;
     let newline = source.includes("\r\n") ? "\r\n" : "\n";
     const tracking = $prose(() => new Plugin({
         state: {
@@ -57,34 +59,47 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
             decorations(state) {
                 if (diagramDecorations.has(state.doc)) return diagramDecorations.get(state.doc);
                 const decorations = [];
-                state.doc.forEach((node, pos) => {
+                const occurrences = new Map();
+                state.doc.descendants((node, pos) => {
                     if (node.type.name !== "code_block" || node.attrs.language !== "mermaid") return;
+                    if (!diagramIds.has(node)) diagramIds.set(node, nextDiagramId++);
+                    const id = diagramIds.get(node);
+                    const occurrence = occurrences.get(id) ?? 0;
+                    occurrences.set(id, occurrence + 1);
+                    const key = `${id}:${occurrence}`;
                     decorations.push(Decoration.widget(pos, () => {
                         const widget = document.createElement("div");
                         widget.className = "editor-diagram";
                         widget.dataset.position = String(pos);
+                        widget.dataset.diagramKey = key;
                         widget.contentEditable = "false";
                         const preview = document.createElement("div");
                         preview.className = "mermaid";
                         const button = document.createElement("button");
                         button.type = "button";
                         button.textContent = "Comment on diagram";
-                        button.addEventListener("click", () => onDiagram(pos));
+                        button.addEventListener("click", () => onDiagram(Number(widget.dataset.position)));
                         widget.append(preview, button);
                         void renderDiagram(preview, node.textContent).catch(onError);
                         return widget;
-                    }, { side: -1, key: `${pos}:${node.textContent}` }));
+                    }, { side: -1, key }));
                 });
                 const result = DecorationSet.create(state.doc, decorations);
                 diagramDecorations.set(state.doc, result);
                 return result;
             },
         },
-        view: () => ({
-            update(current, previous) {
-                if (ready && !current.state.doc.eq(previous.doc)) onChange();
-            },
-        }),
+        view: (current) => {
+            const update = (current, previous) => {
+                const positions = new Map(diagramDecorations.get(current.state.doc)?.find().map((decoration) => [decoration.spec.key, decoration.from]));
+                for (const widget of root.querySelectorAll(".editor-diagram")) {
+                    widget.dataset.position = String(positions.get(widget.dataset.diagramKey));
+                }
+                if (ready && previous && !current.state.doc.eq(previous.doc)) onChange();
+            };
+            update(current);
+            return { update };
+        },
     }));
     try {
         instance = await Editor.make().config((ctx) => {
@@ -174,7 +189,8 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
         instance.action((ctx) => {
             const serialize = ctx.get(serializerCtx);
             view.state.doc.forEach((node, pos) => {
-                const record = records.find((entry) => entry.node === node) ?? records.find((entry) => entry.pos === pos);
+                const record = records.find((entry) => entry.pos === pos && entry.node.eq(node)) ??
+                    records.find((entry) => entry.node === node) ?? records.find((entry) => entry.pos === pos);
                 const text = record?.node.eq(node) ? record.source : node.type.name === "raw_source" ? node.textContent :
                     serialize(view.state.schema.nodes.doc.create(null, [node])).replace(/\n+$/, "").replace(/\n/g, newline) + newline;
                 let prefix = record?.prefix ?? "";
@@ -198,6 +214,35 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
 
     function blockFor(pos, blocks) {
         return blocks.find((block) => pos >= block.pos && pos <= block.pos + block.node.nodeSize - 1);
+    }
+
+    function diagrams(current) {
+        const result = [];
+        instance.action((ctx) => {
+            for (const block of current.blocks) {
+                const nodes = [];
+                const collect = (node, pos) => {
+                    if (node.type.name === "code_block" && node.attrs.language === "mermaid") nodes.push({ node, pos });
+                };
+                collect(block.node, block.pos);
+                block.node.descendants((node, pos) => collect(node, block.pos + 1 + pos));
+                if (!nodes.length) continue;
+                const fences = [];
+                const visit = (node) => {
+                    if (node.type === "code" && node.lang === "mermaid") fences.push(node);
+                    for (const child of node.children ?? []) visit(child);
+                };
+                visit(ctx.get(remarkCtx).parse(block.source));
+                for (let index = 0; index < nodes.length; index++) {
+                    const fence = fences[index];
+                    if (!fence) continue;
+                    const start = fence.position.start.offset, end = fence.position.end.offset;
+                    const from = block.source.lastIndexOf("\n", start - 1) + 1;
+                    result.push({ ...nodes[index], from: block.from + from, source: block.source.slice(from, end) });
+                }
+            }
+        });
+        return result;
     }
 
     return {
@@ -262,10 +307,10 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
             anchors.set(comment.id, start !== undefined && end !== undefined ? { from: start, to: end } : null);
         },
         trackDiagram(comment, revision) {
-            const matches = records.filter((record) => record.node.type.name === "code_block" &&
-                record.node.attrs.language === "mermaid" && record.source.replace(/\n$/, "") === comment.quote);
+            const current = snapshot();
+            const matches = diagrams(current).filter((record) => record.source === comment.quote);
             const match = matches.length === 1 ? matches[0] : comment.revision === revision ?
-                matches.find((record) => baseSource.slice(0, record.from).split("\n").length - 1 === comment.startLine) : undefined;
+                matches.find((record) => current.source.slice(0, record.from).split("\n").length - 1 === comment.startLine) : undefined;
             anchors.set(comment.id, match ? { from: match.pos, to: match.pos + match.node.nodeSize } : null);
         },
         selection(range) {
@@ -296,10 +341,10 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
             };
         },
         diagram(pos) {
-            const current = snapshot(), block = blockFor(pos, current.blocks);
-            if (!block || block.node.type.name !== "code_block" || block.node.attrs.language !== "mermaid") throw new Error("The diagram changed. Select it again.");
+            const current = snapshot(), block = diagrams(current).find((block) => block.pos === pos);
+            if (!block) throw new Error("The diagram changed. Select it again.");
             const startLine = current.source.slice(0, block.from).split("\n").length - 1;
-            const quote = block.source.replace(/\n$/, "");
+            const quote = block.source;
             anchors.set("draft", { from: pos, to: pos + block.node.nodeSize });
             return { kind: "diagram", quote, startLine, endLine: startLine + quote.split("\n").length, startOffset: 0, endOffset: quote.length };
         },

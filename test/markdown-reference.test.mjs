@@ -46,6 +46,7 @@ test("rendering and source mapping finish within a bounded time for pathological
         const payloads = [
             '[a]: /u "' + 'x\\n'.repeat(200000),
             '[' + 'a\\n'.repeat(200000),
+            '['.repeat(200000),
             ...['<!--', '<?x', '<!A', '<![CDATA['].map((opener) => 'x ' + opener.repeat(64000)),
         ];
         const timings = [];
@@ -60,6 +61,6 @@ test("rendering and source mapping finish within a bounded time for pathological
     `;
     const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { timeout: 10000 });
     const timings = JSON.parse(stdout);
-    assert.equal(timings.length, 6);
+    assert.equal(timings.length, 7);
     for (const duration of timings) assert.ok(duration < 5000, `Pathological input took ${duration} ms`);
 });

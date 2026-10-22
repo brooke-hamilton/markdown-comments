@@ -405,7 +405,12 @@ test("legacy unlinked feedback is actionable, and stale retarget submissions do 
     await expect(page.getByRole("status")).toContainText("document changed");
     expect(sent.length).toBe(count);
     expect(await store.comments(path)).toHaveLength(1);
-    await expect(page.locator("#document strong")).toHaveText("changed again");
+    await expect(page.locator("#composer")).toBeVisible();
+    await expect(page.getByLabel("Custom feedback", { exact: true })).toHaveValue(original.instruction);
+    await expect(page.locator("#selection")).toHaveText("clearer");
+    await expect(page.locator("#document strong")).toHaveText("clearer");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator("#document strong")).toHaveText("changed again", { timeout: 10000 });
     await page.getByRole("button", { name: "Select current passage", exact: true }).click();
     await select(page, "changed again");
     await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();

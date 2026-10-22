@@ -407,6 +407,101 @@ test("delivery failure after autosave does not lose the document or comment draf
     await expect(page.locator("#composer")).toBeVisible();
 });
 
+test("duplicate paragraphs retain their individual whitespace after an external update", async ({ page }) => {
+    const duplicate = `${source}\nRepeated paragraph.\n\n\n\nRepeated paragraph.\n`;
+    await writeFile(path, duplicate);
+    await expect(page.locator(".ProseMirror > p")).toHaveCount(4, { timeout: 10000 });
+    await writeFile(path, `${duplicate}\nExternal addition.\n`);
+    await expect(page.locator(".ProseMirror")).toContainText("External addition.", { timeout: 10000 });
+    await append(page);
+    await saved(page);
+    expect(await readFile(path, "utf8")).toBe(`${duplicate}\nExternal addition.\n`.replace("passage to improve.", "passage to improve. Added manually."));
+});
+
+test("unchanged diagrams retain their rendered widget while earlier text shifts their positions", async ({ page }) => {
+    const widget = await page.locator(".editor-diagram").elementHandle();
+    const svg = await page.locator(".editor-diagram svg").elementHandle();
+    const position = await widget.getAttribute("data-position");
+    await append(page, " Typing before the diagram.");
+    await saved(page);
+    expect(await widget.evaluate((element) => element === document.querySelector(".editor-diagram"))).toBe(true);
+    expect(await svg.evaluate((element) => element === document.querySelector(".editor-diagram svg"))).toBe(true);
+    expect(await widget.getAttribute("data-position")).not.toBe(position);
+    await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
+    await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    expect((await store.comments(path))[0].quote).toBe("```mermaid\nflowchart LR\n A[Select] --> B[Comment]\n```");
+    await expect(page.locator("#connectors path")).toHaveCount(1);
+});
+
+for (const container of ["blockquote", "list"]) {
+    test(`nested ${container} diagrams retain full source ranges and anchors`, async ({ page }) => {
+        const fence = container === "blockquote" ? "> ```mermaid\n> flowchart LR\n> A-->B\n> ```" :
+            "- ```mermaid\n  flowchart LR\n  A-->B\n  ```";
+        await writeFile(path, `# Nested\n\n${fence}\n`);
+        await expect(page.locator(".ProseMirror h1")).toHaveText("Nested", { timeout: 10000 });
+        await expect(page.locator(".ProseMirror pre[data-language=mermaid]")).toHaveCount(1, { timeout: 10000 });
+        await expect(page.locator(".editor-diagram svg")).toBeVisible();
+        await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
+        await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+        await expect(page.locator("#composer")).toBeHidden();
+        const comment = (await store.comments(path))[0];
+        expect(comment).toMatchObject({ kind: "diagram", quote: fence, sourceExcerpt: fence, startLine: 2, endLine: 6 });
+        await page.reload();
+        await expect(page.locator("#comments .comment")).toBeVisible();
+        await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+        await expect(page.locator("#connectors path")).toHaveCount(1);
+        await writeFile(path, `# Intro\n\n# Nested\n\n${fence}\n`);
+        await expect(page.locator(".ProseMirror h1")).toHaveCount(2, { timeout: 10000 });
+        await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+        await expect(page.locator("#connectors path")).toHaveCount(1);
+    });
+}
+
+test("diagram feedback retries retain their kind and full fence after delivery failure", async ({ page }) => {
+    const quote = "```mermaid\nflowchart LR\n A[Select] --> B[Comment]\n```";
+    await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
+    await page.getByLabel("Custom feedback", { exact: true }).fill("Simplify the diagram.");
+    sendError = "Sender disconnected";
+    await page.getByRole("button", { name: "Post comment", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Sender disconnected");
+    await expect(page.locator("#composer")).toBeVisible();
+    sendError = undefined;
+    await page.getByRole("button", { name: "Post comment", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    const comments = await store.comments(path);
+    expect(comments).toHaveLength(2);
+    for (const comment of comments) expect(comment).toMatchObject({ kind: "diagram", quote, sourceExcerpt: quote });
+});
+
+test("retarget save failures preserve the composer until autosave is explicitly retried", async ({ page }) => {
+    await select(page, "formatted");
+    await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    const original = (await store.comments(path))[0];
+    await writeFile(path, source.replace("formatted", "clearer"));
+    await expect(page.locator(".ProseMirror strong")).toHaveText("clearer", { timeout: 10000 });
+    await page.getByRole("button", { name: "Select current passage", exact: true }).click();
+    await page.route("**/document", (route) => route.fulfill({
+        status: 500, contentType: "application/json", body: JSON.stringify({ error: "Disk write failed" }),
+    }));
+    await append(page);
+    await select(page, "clearer");
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Disk write failed");
+    await expect(page.locator("#composer")).toBeVisible();
+    await expect(page.getByLabel("Custom feedback", { exact: true })).toHaveValue(original.instruction);
+    await expect(page.locator("#selection")).toHaveText("clearer");
+    expect(await store.comments(path)).toHaveLength(1);
+    await page.unroute("**/document");
+    await page.getByRole("button", { name: "Retry autosave", exact: true }).click();
+    await saved(page);
+    await expect(page.locator("#composer")).toBeVisible();
+    await page.getByRole("button", { name: "Resubmit feedback", exact: true }).click();
+    await expect(page.locator("#composer")).toBeHidden();
+    expect(await store.comments(path)).toHaveLength(2);
+});
+
 test("empty documents autosave without accumulating whitespace", async ({ page }) => {
     await writeFile(path, "\n");
     await expect(page.locator(".ProseMirror")).toHaveText("", { timeout: 10000 });

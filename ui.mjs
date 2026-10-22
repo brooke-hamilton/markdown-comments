@@ -184,12 +184,14 @@ async function send(input) {
     if (!selected || busy) return;
     busy = true;
     controls();
+    let submitting = false;
     try {
         if (editor) {
             const diagramPos = selected.diagramPos;
             await flushDocument(true);
-            selected = { ...(diagramPos === undefined ? editor.selected() : editor.diagram(diagramPos)), revision: state.revision };
+            selected = { ...(diagramPos === undefined ? editor.selected() : editor.diagram(diagramPos)), diagramPos, revision: state.revision };
         }
+        submitting = true;
         const comment = retargetId ?
             await api("reopen", { id: retargetId, retarget: true, selection: selected }) :
             await api("comments", { ...selected, ...input });
@@ -199,7 +201,7 @@ async function send(input) {
         await refresh();
         notice("Comment posted and sent to Copilot. The document updates automatically.");
     } catch (error) {
-        if (retargetId) {
+        if (retargetId && submitting) {
             closeDraft();
             try {
                 await refresh();

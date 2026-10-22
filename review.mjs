@@ -53,6 +53,26 @@ export function renderDocument(source) {
     return md.render(source);
 }
 
+function hasReference(source) {
+    let opening = false, closing = false, referenceLabel = false;
+    for (const character of source) {
+        if (referenceLabel && character === "]") return true;
+        if (closing) {
+            if (character === ":") return true;
+            if (character === "[") referenceLabel = true;
+            if (/\s/.test(character)) continue;
+            closing = false;
+        }
+        if (character === "\n") opening = referenceLabel = false;
+        else if (character === "[") opening = true;
+        else if (character === "]" && opening) {
+            opening = false;
+            closing = true;
+        }
+    }
+    return false;
+}
+
 export function editingBlocks(source) {
     const lines = source.split("\n");
     const offsets = [0];
@@ -76,7 +96,7 @@ export function editingBlocks(source) {
         const text = source.slice(from, to);
         const code = token.type === "fence" || token.type === "code_block";
         const raw = code ? token.type === "fence" && /\s/.test(token.info.trim()) :
-            /<\/?[a-zA-Z!]|<!--|!\[|\[[^\]\n]*\]\s*(?:\[[^\]\n]*\]|:)|^ *:{3,}|^ *(?:import|export) |(?:^|\n) *\$\$/m.test(text);
+            hasReference(text) || /<\/?[a-zA-Z!]|<!--|!\[|^ *:{3,}|^ *(?:import|export) |(?:^|\n) *\$\$/m.test(text);
         add(from, to, raw);
     }
     if (source.slice(cursor).trim()) add(cursor, source.length, true);
