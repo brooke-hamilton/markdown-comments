@@ -5,13 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Markdown comments</title>
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./app.css">
 </head>
 <body>
     <header>
         <div><strong id="title">Markdown comments</strong><small id="path"></small></div>
-        <button id="refresh" type="button">Refresh</button>
+        <div class="document-actions">
+            <span id="edit-status" aria-live="polite"></span>
+            <button id="retry-save" type="button" hidden>Retry autosave</button>
+            <button id="reload-document" type="button" hidden>Use disk version</button>
+        </div>
     </header>
-    <p id="notice" role="status" aria-live="polite">Loading document...</p>
+    <p id="notice" role="status" aria-live="polite" hidden></p>
     <div id="selection-toolbar" role="toolbar" aria-label="Selected text" hidden>
         <button id="new-comment" type="button" aria-keyshortcuts="Control+Alt+m Meta+Alt+m">New comment</button>
     </div>
@@ -25,13 +30,10 @@
             </div>
             <p id="empty-comments" class="hint">Select text, then choose <strong>New comment</strong> or press <kbd>Ctrl+Alt+M</kbd>. Your comment appears beside that passage.</p>
             <section id="composer" class="comment draft" aria-label="New comment" hidden>
-                <div class="comment-heading"><span class="avatar" aria-hidden="true">Y</span><div><strong>You</strong><small>New comment</small></div></div>
                 <blockquote id="selection"></blockquote>
                 <form id="feedback-form">
-                    <label for="feedback">Custom feedback</label>
-                    <textarea id="feedback" maxlength="8000" rows="3" placeholder="Tell Copilot what to change..."></textarea>
+                    <textarea id="feedback" aria-label="Custom feedback" maxlength="8000" rows="3" placeholder="Tell Copilot what to change..."></textarea>
                     <div id="presets" aria-label="Standard feedback"></div>
-                    <p class="hint">Posting a comment asks Copilot to edit this passage.</p>
                     <div class="comment-actions">
                         <button id="cancel-comment" type="button">Cancel</button>
                         <button id="send" class="primary" type="submit" disabled>Post comment</button>

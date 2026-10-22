@@ -41,7 +41,7 @@ session = await joinSession({
         createCanvas({
             id: "markdown-comments",
             displayName: "Markdown comments",
-            description: "Review a local Markdown document with rendered Mermaid and selection-based feedback sent to Copilot.",
+            description: "Review or edit a local Markdown document with rendered Mermaid and selection-based feedback sent to Copilot.",
             inputSchema: {
                 type: "object",
                 properties: { path: { type: "string", minLength: 1, description: "Absolute path to a Markdown file." } },

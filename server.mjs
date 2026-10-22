@@ -6,15 +6,16 @@ import { ReviewError } from "./review.mjs";
 const files = {
     "": ["index.html", "text/html; charset=utf-8"],
     "app.js": ["dist/app.js", "text/javascript; charset=utf-8"],
+    "app.css": ["dist/app.css", "text/css; charset=utf-8"],
     "style.css": ["style.css", "text/css; charset=utf-8"],
 };
 
-async function body(req) {
+async function body(req, limit = 128 * 1024) {
     let size = 0;
     const chunks = [];
     for await (const chunk of req) {
         size += chunk.length;
-        if (size > 128 * 1024) throw new ReviewError("Request exceeds 128 KiB.", 413);
+        if (size > limit) throw new ReviewError("Request exceeds the allowed size.", 413);
         chunks.push(chunk);
     }
     try {
@@ -48,12 +49,13 @@ export async function startServer({ path, store }) {
                 return res.end(content);
             }
             if (req.method === "GET" && route === "state") return json(200, await store.state(path));
-            if (req.method === "POST" && ["comments", "resolve", "reopen"].includes(route)) {
+            if (req.method === "POST" && ["comments", "resolve", "reopen", "document"].includes(route)) {
                 if (req.headers.origin !== origin || req.headers["content-type"]?.split(";")[0] !== "application/json") {
                     throw new ReviewError("Same-origin JSON requests are required.", 403);
                 }
-                const input = await body(req);
+                const input = await body(req, route === "document" ? 12 * 1024 * 1024 + 1024 : undefined);
                 if (!input || typeof input !== "object" || Array.isArray(input)) throw new ReviewError("Expected a JSON object.");
+                if (route === "document") return json(200, await store.saveDocument(path, input));
                 return json(200, route === "comments" ? await store.submit(path, input) :
                     route === "reopen" ? await store.reopen(path, input) : await store.resolve(path, input));
             }
@@ -72,7 +74,7 @@ export async function startServer({ path, store }) {
         path, server, url: `${origin}/${token}/`,
         close: () => new Promise((resolve, reject) => {
             server.close((error) => error ? reject(error) : resolve());
-            server.closeIdleConnections();
+            server.closeAllConnections();
         }),
     };
 }

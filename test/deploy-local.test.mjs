@@ -49,6 +49,7 @@ test("deploys current worktree files and production dependencies using an allowl
     assert.deepEqual(f.calls.map(({ args }) => args), [["run", "build"], ["test"], ["ci", "--omit=dev"]]);
     assert.equal(f.calls[0].cwd, f.source);
     assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), "worktree:extension.mjs");
+    assert.equal(await readFile(join(f.target, "markdown-reference.mjs"), "utf8"), "worktree:markdown-reference.mjs");
     assert.equal(await readFile(join(f.target, "node_modules", "runtime.txt"), "utf8"), "production dependencies");
     for (const file of ["private.md", "artifacts", "scripts"]) {
         await assert.rejects(readFile(join(f.target, file)), { code: "ENOENT" });

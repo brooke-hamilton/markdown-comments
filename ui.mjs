@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import mermaid from "mermaid";
+import { createMarkdownEditor } from "./editor.mjs";
 
 mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, theme: "neutral", htmlLabels: false, flowchart: { htmlLabels: false } });
 const $ = (selector) => document.querySelector(selector);
@@ -19,10 +20,17 @@ let refreshing = false;
 let diagramId = 0;
 let lastComments = "";
 let layoutFrame;
+let editor;
+let externalChanged = false;
+let saving;
+let saveTimer;
+let saveError;
+let dirtySince;
 const lastAnchorPositions = new Map();
 
 function notice(message, error = false) {
     $("#notice").textContent = message;
+    $("#notice").hidden = !message;
     $("#notice").classList.toggle("error", error);
 }
 
@@ -31,72 +39,35 @@ async function api(route, input) {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status}).`);
+    if (!response.ok) {
+        const error = new Error(result.error ?? `Request failed (${response.status}).`);
+        error.status = response.status;
+        throw error;
+    }
     return result;
 }
 
 function controls() {
     $("#send").disabled = busy || !selected;
     $("#cancel-comment").disabled = busy;
-    $("#refresh").disabled = busy;
     for (const button of $("#presets").children) button.disabled = busy || !selected;
     for (const button of $("#comments").querySelectorAll("button")) button.disabled = busy;
-}
-
-function sourceElement(node) {
-    return (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest("[data-start-line]");
-}
-
-function rangeAt(startOffset, endOffset) {
-    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
-    let offset = 0;
-    let start;
-    while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const end = offset + node.textContent.length;
-        if (!start && startOffset >= offset && startOffset < end) start = { node, offset: startOffset - offset };
-        if (start && endOffset <= end) {
-            const range = document.createRange();
-            range.setStart(start.node, start.offset);
-            range.setEnd(node, endOffset - offset);
-            return range;
-        }
-        offset = end;
-    }
+    $("#retry-save").hidden = !saveError || externalChanged;
+    $("#retry-save").disabled = busy || Boolean(saving);
+    $("#reload-document").hidden = !externalChanged;
+    $("#reload-document").disabled = busy || Boolean(saving);
+    $("#edit-status").textContent = !editor ? "Loading..." : externalChanged ? "Disk changed - local draft preserved" :
+        saveError ? "Not saved - retry needed" : saving ? "Saving..." : editor.dirty ? "Unsaved edits - autosaving..." : "Saved";
+    editor?.setReadonly(busy || draftOpen);
 }
 
 function commentRange(comment) {
     if (comment.kind === "diagram") return;
-    if (comment.revision === state.revision) {
-        const range = rangeAt(comment.startOffset, comment.endOffset);
-        return range?.toString() === comment.quote ? range : undefined;
-    }
-    // Reattach only an unchanged, unambiguous quote; changed passages stay unlinked.
-    const text = article.textContent;
-    const matches = [];
-    let offset = text.indexOf(comment.quote);
-    while (offset !== -1) {
-        const prefix = comment.anchor?.prefix ?? "";
-        const suffix = comment.anchor?.suffix ?? "";
-        if (text.slice(0, offset).endsWith(prefix) && text.slice(offset + comment.quote.length).startsWith(suffix)) {
-            const range = rangeAt(offset, offset + comment.quote.length);
-            if (range && !sourceElement(range.startContainer)?.closest("figure")) matches.push(range);
-        }
-        if (matches.length > 1) return;
-        offset = text.indexOf(comment.quote, offset + 1);
-    }
-    return matches[0];
+    return editor?.range(comment.id ?? "draft");
 }
 
 function anchorFor(comment) {
-    if (comment.kind !== "diagram") return commentRange(comment);
-    const figures = [...article.querySelectorAll("figure[data-start-line]")];
-    const matches = figures.filter((figure) => {
-        const source = state.source.split("\n").slice(Number(figure.dataset.startLine), Number(figure.dataset.endLine)).join("\n");
-        return source === comment.quote;
-    });
-    if (comment.revision === state.revision) return matches.find((figure) => Number(figure.dataset.startLine) === comment.startLine);
-    return matches.length === 1 ? matches[0] : undefined;
+    return comment.kind === "diagram" ? editor?.diagramElement(comment.id ?? "draft") : commentRange(comment);
 }
 
 function anchorRect(anchor, last = false) {
@@ -115,7 +86,7 @@ function setSelection(value) {
 }
 
 function captureSelection() {
-    if (busy || !state || draftOpen) return;
+    if (busy || !editor || draftOpen) return;
     const selection = window.getSelection();
     if (!selection.rangeCount || selection.isCollapsed) {
         if (!toolbar.contains(document.activeElement)) setSelection(undefined);
@@ -123,54 +94,26 @@ function captureSelection() {
     }
     const range = selection.getRangeAt(0);
     if (!article.contains(range.startContainer) || !article.contains(range.endContainer)) return;
-    const start = sourceElement(range.startContainer);
-    const end = sourceElement(range.endContainer);
-    if (!start || !end) return;
-    if (range.cloneContents().querySelector("svg") || start.closest("figure") || end.closest("figure")) {
+    if (range.cloneContents().querySelector("svg, .editor-diagram") || range.startContainer.parentElement?.closest(".editor-diagram") || range.endContainer.parentElement?.closest(".editor-diagram")) {
         setSelection(undefined);
-        notice('Use "Comment on diagram" to select a Mermaid diagram.', true);
-        return;
+        return notice('Use "Comment on diagram" for a Mermaid preview.', true);
     }
-    setSelection(selectionFromRange(range));
-    notice(retargetId ? 'Choose New comment to resubmit the original feedback on this passage.' :
-        "Choose New comment, or press Ctrl+Alt+M, to comment beside this passage.");
-}
-
-function selectionFromRange(range) {
-    const start = sourceElement(range.startContainer);
-    const end = sourceElement(range.endContainer);
-    const before = document.createRange();
-    before.selectNodeContents(article);
-    before.setEnd(range.startContainer, range.startOffset);
-    const startOffset = before.toString().length;
-    const quote = range.toString();
-    if (!quote.trim()) return;
-    const blockBefore = document.createRange();
-    blockBefore.selectNodeContents(start);
-    blockBefore.setEnd(range.startContainer, range.startOffset);
-    const blockAfter = document.createRange();
-    blockAfter.selectNodeContents(end);
-    blockAfter.setStart(range.endContainer, range.endOffset);
-    return {
-        kind: "text", revision: state.revision, quote, startOffset, endOffset: startOffset + quote.length,
-        anchor: {
-            startBlockOffset: blockBefore.toString().length,
-            endBlockOffset: end.textContent.length - blockAfter.toString().length,
-            prefix: blockBefore.toString().slice(-160), suffix: blockAfter.toString().slice(0, 160),
-        },
-        startLine: Math.min(Number(start.dataset.startLine), Number(end.dataset.startLine)),
-        endLine: Math.max(Number(start.dataset.endLine), Number(end.dataset.endLine)),
-    };
+    if (!range.toString().trim()) return setSelection(undefined);
+    try {
+        editor.selection(range);
+        setSelection({ ...editor.selected(), revision: state.revision });
+    } catch (error) {
+        setSelection(undefined);
+        notice(error.message, true);
+    }
 }
 
 function selectionFor(comment) {
     const anchor = anchorFor(comment);
     if (!anchor) return;
-    if (anchor instanceof Range) return selectionFromRange(anchor);
-    const startLine = Number(anchor.dataset.startLine);
-    const endLine = Number(anchor.dataset.endLine);
-    const quote = state.source.split("\n").slice(startLine, endLine).join("\n");
-    return { kind: "diagram", revision: state.revision, quote, startLine, endLine, startOffset: 0, endOffset: quote.length };
+    if (comment.kind === "diagram") return { ...editor.diagramFor(comment.id), revision: state.revision };
+    editor.selection(anchor);
+    return { ...editor.selected(), revision: state.revision };
 }
 
 function openDraft() {
@@ -188,6 +131,7 @@ function openDraft() {
     $("#empty-comments").hidden = true;
     highlightComments();
     layoutComments();
+    controls();
     composer.scrollIntoView({ block: "nearest", inline: "nearest" });
     $("#feedback").focus({ preventScroll: true });
 }
@@ -200,6 +144,7 @@ function closeDraft() {
     setSelection(undefined);
     window.getSelection().removeAllRanges();
     $("#empty-comments").hidden = visibleComments().length > 0;
+    controls();
 }
 
 document.addEventListener("selectionchange", captureSelection);
@@ -207,7 +152,10 @@ toolbar.addEventListener("pointerdown", (event) => event.preventDefault());
 $("#new-comment").addEventListener("click", openDraft);
 $("#cancel-comment").addEventListener("click", closeDraft);
 document.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === "m") {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && editor) {
+        event.preventDefault();
+        if (!busy) void flushDocument().catch((error) => notice(error.message, true));
+    } else if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === "m") {
         captureSelection();
         if (selected) {
             event.preventDefault();
@@ -231,48 +179,32 @@ article.addEventListener("contextmenu", (event) => {
         positionToolbar(event.clientX, event.clientY);
     }
 });
-article.addEventListener("click", (event) => {
-    const button = event.target.closest(".diagram-comment");
-    if (button && state && !busy) {
-        if (draftOpen) return notice("Post or cancel the current comment before starting another.");
-        const figure = button.closest("figure");
-        const startLine = Number(figure.dataset.startLine);
-        const endLine = Number(figure.dataset.endLine);
-        const quote = state.source.split("\n").slice(startLine, endLine).join("\n");
-        setSelection({ kind: "diagram", revision: state.revision, quote, startLine, endLine, startOffset: 0, endOffset: quote.length });
-        openDraft();
-        return;
-    }
-    if (!window.getSelection().isCollapsed) return;
-    for (const comment of visibleComments()) {
-        const anchor = anchorFor(comment);
-        if (!anchor) continue;
-        if ([...anchor.getClientRects()].some((rect) => event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)) {
-            activateComment(comment, "card");
-            return;
-        }
-    }
-});
 
 async function send(input) {
     if (!selected || busy) return;
     busy = true;
     controls();
     try {
+        if (editor) {
+            const diagramPos = selected.diagramPos;
+            await flushDocument(true);
+            selected = { ...(diagramPos === undefined ? editor.selected() : editor.diagram(diagramPos)), revision: state.revision };
+        }
         const comment = retargetId ?
             await api("reopen", { id: retargetId, retarget: true, selection: selected }) :
             await api("comments", { ...selected, ...input });
+        if (editor) editor.track(comment.id, editor.range("draft"));
         activeId = comment.id;
         closeDraft();
         await refresh();
-        notice("Comment posted and sent to Copilot. The preview updates when the file changes.");
+        notice("Comment posted and sent to Copilot. The document updates automatically.");
     } catch (error) {
         if (retargetId) {
             closeDraft();
             try {
                 await refresh();
             } catch (refreshError) {
-                notice(`${error.message} Refresh also failed: ${refreshError.message}`, true);
+                notice(`${error.message} Checking the latest document also failed: ${refreshError.message}`, true);
                 return;
             }
         }
@@ -315,13 +247,16 @@ function retarget(comment) {
 
 async function reopen(comment) {
     if (busy) return;
-    const selection = selectionFor(comment);
+    let selection = selectionFor(comment);
     if (!selection || !comment.canReopen) return retarget(comment);
     busy = true;
     controls();
     renderComments();
     try {
+        await flushDocument(true);
+        selection = { ...selectionFor(comment), revision: state.revision };
         const next = await api("reopen", { id: comment.id, selection });
+        if (editor) editor.track(next.id, editor.range("draft"));
         activeId = next.id;
         await refresh();
         notice(next.status === "sent" ? "Feedback reopened and sent to Copilot." :
@@ -330,7 +265,7 @@ async function reopen(comment) {
         try {
             await refresh();
         } catch (refreshError) {
-            notice(`${error.message} Refresh also failed: ${refreshError.message}`, true);
+            notice(`${error.message} Checking the latest document also failed: ${refreshError.message}`, true);
             return;
         }
         notice(error.message, true);
@@ -352,7 +287,8 @@ function activateComment(comment, focus = "passage") {
         card?.focus({ preventScroll: true });
         card?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     } else if (anchor) {
-        const target = anchor instanceof Range ? sourceElement(anchor.startContainer) : anchor;
+        const target = anchor instanceof Range ?
+            (anchor.startContainer.nodeType === Node.ELEMENT_NODE ? anchor.startContainer : anchor.startContainer.parentElement) : anchor;
         target?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     } else {
         notice("The original passage changed or is ambiguous. This comment is preserved but is no longer linked to text.");
@@ -402,7 +338,7 @@ function renderComments() {
         feedback.textContent = comment.instruction;
         const meta = document.createElement("small");
         meta.className = "comment-source";
-        const location = !linked ? "Original passage changed - unlinked" : comment.revision !== state.revision ? "Passage unchanged - document updated" : `Lines ${comment.startLine + 1}-${comment.endLine}`;
+        const location = !linked ? "Original passage changed - unlinked" : editor?.dirty ? "Linked in local draft" : comment.revision !== state.revision ? "Passage unchanged - document updated" : `Lines ${comment.startLine + 1}-${comment.endLine}`;
         meta.textContent = `${location} | ${comment.status}`;
         const actions = document.createElement("div");
         actions.className = "comment-actions";
@@ -567,58 +503,170 @@ window.addEventListener("resize", scheduleLayout);
 window.addEventListener("scroll", scheduleLayout, { passive: true, capture: true });
 article.addEventListener("toggle", scheduleLayout, true);
 
-async function diagrams() {
-    for (const source of article.querySelectorAll(".mermaid-source")) {
-        try {
-            const { svg } = await mermaid.render(`diagram-${diagramId++}`, source.textContent);
-            const output = document.createElement("div");
-            output.className = "mermaid";
+async function renderEditorDiagram(output, source) {
+    try {
+        const { svg } = await mermaid.render(`diagram-${diagramId++}`, source);
+        if (output.isConnected) {
             output.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
-            source.before(output);
-            const details = document.createElement("details");
-            const summary = document.createElement("summary");
-            summary.textContent = "Mermaid source";
-            details.append(summary);
-            source.before(details);
-            details.append(source);
-        } catch (error) {
-            const message = document.createElement("p");
-            message.className = "error";
-            message.textContent = `Mermaid could not render: ${error.message}`;
-            source.before(message);
+            scheduleLayout();
         }
+    } catch (error) {
+        output.classList.add("error");
+        output.textContent = `Mermaid could not render: ${error.message}`;
     }
 }
 
-async function refresh() {
-    if (refreshing) return;
-    refreshing = true;
+function scheduleSave() {
+    clearTimeout(saveTimer);
+    if (!editor?.dirty || externalChanged || saveError) return;
+    dirtySince ??= Date.now();
+    saveTimer = setTimeout(() => {
+        void flushDocument().catch((error) => notice(error.message, true));
+    }, Math.min(600, Math.max(0, 2000 - (Date.now() - dirtySince))));
+}
+
+async function flushDocument(checkRevision = false) {
+    clearTimeout(saveTimer);
+    while (saving) await saving;
+    if (!editor) return;
+    if (externalChanged) throw new Error("The document changed on disk. Copy your draft before choosing Use disk version to reconcile the changes.");
+    if (saveError) throw saveError;
+    if (!editor.dirty && !checkRevision) return;
+    const checkpoint = editor.snapshot();
+    const currentEditor = editor;
+    const task = (async () => {
+        try {
+            const saved = await api("document", { revision: state.revision, source: checkpoint.source });
+            state = { ...state, ...saved };
+            currentEditor.accept(saved, checkpoint);
+            dirtySince = undefined;
+        } catch (error) {
+            saveError = error;
+            if (error.status === 409) externalChanged = true;
+            throw error;
+        }
+    })();
+    saving = task;
+    controls();
+    try { await task; }
+    finally {
+        if (saving === task) saving = undefined;
+        controls();
+        renderComments();
+        scheduleSave();
+    }
+    // Typing can continue during autosave; feedback must refer to the newest saved draft.
+    if (checkRevision && editor.dirty) await flushDocument(true);
+}
+
+function trackComments() {
+    for (const comment of state.comments) {
+        if (editor.hasAnchor(comment.id)) continue;
+        if (comment.kind === "diagram") editor.trackDiagram(comment, state.revision);
+        else editor.trackText(comment, state.revision);
+    }
+}
+
+function applyDisk(next) {
+    clearTimeout(saveTimer);
+    editor.replace(next.source, next.editing);
+    state = next;
+    externalChanged = false;
+    saveError = undefined;
+    dirtySince = undefined;
+    setSelection(undefined);
+    trackComments();
+    captureSelection();
+    notice("Document updated from disk. Changes are saved automatically.");
+}
+
+$("#retry-save").addEventListener("click", () => {
+    saveError = undefined;
+    void flushDocument().then(() => notice("Changes saved automatically.")).catch((error) => notice(error.message, true));
+});
+$("#reload-document").addEventListener("click", async () => {
+    if ((editor?.dirty || draftOpen) && !window.confirm("Discard your unsaved document edits and comment draft and use the current disk version? Copy your draft first if you need it.")) return;
+    busy = true;
+    controls();
     try {
         const next = await api("state");
+        closeDraft();
+        applyDisk(next);
+        renderPrompts(next.prompts);
+        renderComments();
+    } catch (error) { notice(error.message, true); }
+    finally { busy = false; controls(); }
+});
+window.addEventListener("beforeunload", (event) => {
+    if (editor?.dirty) { event.preventDefault(); event.returnValue = ""; }
+});
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) void flushDocument().catch((error) => notice(error.message, true));
+});
+
+async function refresh() {
+    if (refreshing || saving) return;
+    refreshing = true;
+    try {
+        const revision = state?.revision;
+        const next = await api("state");
+        // A save may have started while the read was in flight. Never apply that stale response.
+        if (saving || state?.revision !== revision) return;
         const changed = state?.revision !== next.revision;
         const promptsChanged = JSON.stringify(state?.prompts) !== JSON.stringify(next.prompts);
-        state = next;
-        $("#title").textContent = state.title;
-        $("#path").textContent = state.path;
-        if (changed) {
-            closeDraft();
-            article.innerHTML = DOMPurify.sanitize(state.html, { ADD_ATTR: ["target"] });
-            await diagrams();
-            notice("Select a passage, then choose New comment. Comments stay beside the text they refer to.");
+        if (!editor) {
+            state = next;
+            $("#title").textContent = state.title;
+            $("#path").textContent = state.path;
+            article.classList.add("editing");
+            editor = await createMarkdownEditor({
+                root: article, source: state.source, editing: state.editing,
+                onError: (error) => notice(error.message, true),
+                renderDiagram: renderEditorDiagram,
+                onDiagram: (pos) => {
+                    if (busy || draftOpen) return;
+                    try {
+                        setSelection({ ...editor.diagram(pos), diagramPos: pos, revision: state.revision });
+                        openDraft();
+                    } catch (error) { notice(error.message, true); }
+                },
+                onChange: () => {
+                    if (!editor) return;
+                    if (!draftOpen) setSelection(undefined);
+                    controls();
+                    renderComments();
+                    scheduleSave();
+                },
+            });
+        } else if (changed) {
+            if (editor.dirty || draftOpen || busy) {
+                externalChanged = true;
+                clearTimeout(saveTimer);
+                notice("The document changed on disk. Your local draft and comment are preserved. Copy your draft or choose Use disk version to reconcile the changes.", true);
+            } else {
+                applyDisk(next);
+            }
+        } else if (externalChanged) {
+            externalChanged = false;
+            saveError = undefined;
+            scheduleSave();
         }
+        state.comments = next.comments;
+        state.prompts = next.prompts;
+        trackComments();
         if (promptsChanged) renderPrompts(state.prompts);
         const commentData = JSON.stringify(state.comments);
         if (commentData !== lastComments || changed) {
             lastComments = commentData;
             renderComments();
         }
+        controls();
     } finally {
         refreshing = false;
     }
 }
 
-$("#refresh").addEventListener("click", () => void refresh().catch((error) => notice(error.message, true)));
 await refresh().catch((error) => notice(error.message, true));
 setInterval(() => {
-    if (!selected && !busy && !document.hidden) void refresh().catch((error) => notice(error.message, true));
+    if (!busy && !document.hidden) void refresh().catch((error) => notice(error.message, true));
 }, 2000);

@@ -6,8 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const runtimeFiles = [
-    "extension.mjs", "copilot-extension.json", "review.mjs", "server.mjs",
-    "index.html", "style.css", "feedback.json", join("dist", "app.js"),
+    "extension.mjs", "copilot-extension.json", "review.mjs", "markdown-reference.mjs", "server.mjs",
+    "index.html", "style.css", "feedback.json", join("dist", "app.js"), join("dist", "app.css"),
     "package.json", "package-lock.json", "LICENSE", join("examples", "welcome.md"),
 ];
 const managedPaths = [...runtimeFiles, "node_modules"];
@@ -131,7 +131,8 @@ export async function deployLocal({
     source = sourceRoot, env = process.env, home = homedir(), log = console.log,
     npm = runNpm, verify = verifySnapshot, install = installSnapshot,
 } = {}) {
-    if (Number(process.versions.node.split(".")[0]) < 22) throw new Error("Developer deployment requires Node.js 22 or later.");
+    const [major, minor] = process.versions.node.split(".").map(Number);
+    if (major < 22 || major === 22 && minor < 12) throw new Error("Developer deployment requires Node.js 22.12.0 or later.");
     source = await realpath(source);
     const copilotHome = await canonical(deploymentPaths({ env, home }).copilotHome);
     const target = join(copilotHome, "extensions", "markdown-comments");

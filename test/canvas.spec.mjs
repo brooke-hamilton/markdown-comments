@@ -65,6 +65,11 @@ async function post(page, feedback = "Use a simpler term.") {
     return (await store.comments(path)).at(-1);
 }
 
+async function waitForSync(page) {
+    await page.waitForResponse((response) => response.url().endsWith("/state"));
+    await expect(page.locator("#edit-status")).toHaveText("Saved");
+}
+
 test("renders formatted Markdown and Mermaid without a detached always-visible form", async ({ page }) => {
     await expect(page.locator("#document strong")).toHaveText("formatted");
     await expect(page.locator("#document svg")).toContainText("Select");
@@ -80,6 +85,9 @@ test("shows New comment beside the selection and opens an anchored, focused marg
     expect(Math.abs(toolbar.y - (text.y + text.height))).toBeLessThan(20);
     await page.locator("#new-comment").click();
     await expect(page.getByLabel("Custom feedback", { exact: true })).toBeFocused();
+    await expect(page.locator("#composer .comment-heading, #composer .avatar, #composer label, #composer .hint")).toHaveCount(0);
+    await expect(page.locator("#composer")).not.toContainText("Custom feedback");
+    await expect(page.locator("#composer")).not.toContainText("Posting a comment");
     const composer = await page.locator("#composer").boundingBox();
     expect(Math.abs(composer.y - text.y)).toBeLessThan(25);
     expect(composer.x).toBeGreaterThan(text.x + text.width);
@@ -143,14 +151,14 @@ test("diagram composer and saved comment are anchored beside the Mermaid diagram
     await page.getByRole("button", { name: "Comment on diagram" }).click();
     await expect(page.locator("#selection")).toContainText("```mermaid");
     await expect(page.getByLabel("Custom feedback", { exact: true })).toBeFocused();
-    const figure = await page.locator("#document figure").boundingBox();
+    const figure = await page.locator(".editor-diagram").boundingBox();
     const composer = await page.locator("#composer").boundingBox();
     expect(Math.abs(composer.y - figure.y)).toBeLessThan(5);
     await page.getByRole("button", { name: "Rewrite", exact: true }).click();
     await expect(page.locator("#comments")).toContainText("flowchart LR");
     expect(sent.at(-1)).toContain("A[Select] --> B[Comment]");
     const balloon = await page.locator("#comments .comment").boundingBox();
-    const currentFigure = await page.locator("#document figure").boundingBox();
+    const currentFigure = await page.locator(".editor-diagram").boundingBox();
     expect(Math.abs(balloon.y - currentFigure.y)).toBeLessThan(5);
 });
 
@@ -162,7 +170,8 @@ test("rejects stale selections and refreshes external edits", async ({ page }) =
     await expect(page.getByRole("status")).toContainText("document changed");
     expect(sent.length).toBe(count);
     await expect(page.locator("#composer")).toBeVisible();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Use disk version", exact: true }).click();
     await expect(page.locator("#composer")).toBeHidden();
     await expect(page.locator("#document")).toContainText("New content from an external edit.");
 });
@@ -198,11 +207,11 @@ test("captures a selection spanning formatting and multiple paragraphs", async (
 
 test("invalid Mermaid remains commentable beside its source", async ({ page }) => {
     await writeFile(path, "# Broken diagram\n\n```mermaid\nnot a valid diagram\n```\n");
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await expect(page.locator("#document .error")).toContainText("Mermaid could not render");
     await page.getByRole("button", { name: "Comment on diagram" }).click();
     await expect(page.locator("#selection")).toContainText("not a valid diagram");
-    const figure = await page.locator("#document figure").boundingBox();
+    const figure = await page.locator(".editor-diagram").boundingBox();
     const composer = await page.locator("#composer").boundingBox();
     expect(Math.abs(composer.y - figure.y)).toBeLessThan(5);
 });
@@ -238,16 +247,16 @@ test("balloons avoid collisions and remain linked after resizing", async ({ page
 test("a diagram draft stays beside the diagram even when an earlier balloon fills the margin", async ({ page }) => {
     await post(page, "This is an intentionally long comment. ".repeat(20));
     await page.getByRole("button", { name: "Comment on diagram" }).click();
-    const figure = await page.locator("#document figure").boundingBox();
+    const figure = await page.locator(".editor-diagram").boundingBox();
     const draft = await page.locator("#composer").boundingBox();
     expect(Math.abs(draft.y - figure.y)).toBeLessThan(5);
     const earlier = await page.locator("#comments .comment").boundingBox();
     expect(earlier.y >= draft.y + draft.height + 10 || earlier.y + earlier.height <= draft.y - 10).toBe(true);
 });
 
-test("clicking commented text activates its balloon and linked highlight", async ({ page }) => {
+test("clicking a comment activates its linked highlight without taking over document editing", async ({ page }) => {
     const comment = await post(page);
-    await page.locator("#document strong").click();
+    await page.locator(`#comment-${comment.id}`).click();
     await expect(page.locator(`#comment-${comment.id}`)).toBeFocused();
     await expect(page.locator(`#comment-${comment.id}`)).toHaveClass(/active/);
     expect(await page.evaluate(() => CSS.highlights.get("review-active").size)).toBe(1);
@@ -284,7 +293,7 @@ test("Reopen actually dispatches an unchanged moved passage with fresh context a
     const original = await post(page);
     await writeFile(path, `# New introduction\n\n${source}`);
     await store.complete(path, original.id);
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await page.getByRole("button", { name: /Show resolved/ }).click();
     const count = sent.length;
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
@@ -313,7 +322,7 @@ test("changed reopened feedback selects a new target explicitly and sends nothin
     const original = await post(page);
     await writeFile(path, source.replace("formatted", "clearer"));
     await store.complete(path, original.id);
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await page.getByRole("button", { name: /Show resolved/ }).click();
     const count = sent.length;
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
@@ -337,7 +346,7 @@ test("changed reopened feedback selects a new target explicitly and sends nothin
 test("failed reopen shows real delivery errors and exposes an explicit Retry", async ({ page }) => {
     const original = await post(page);
     await store.resolve(path, { id: original.id, resolved: true });
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await page.getByRole("button", { name: /Show resolved/ }).click();
     sendError = "Test sender disconnected";
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
@@ -360,7 +369,7 @@ test("reopened diagram feedback dispatches its current source range, and changed
     const original = (await store.comments(path))[0];
     await writeFile(path, `# Introduction\n\n${source}`);
     await store.complete(path, original.id);
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await page.getByRole("button", { name: /Show resolved/ }).click();
     const count = sent.length;
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
@@ -371,7 +380,7 @@ test("reopened diagram feedback dispatches its current source range, and changed
     const retry = (await store.comments(path)).find((comment) => comment.previousCommentId === original.id);
     await writeFile(path, source.replace("B[Comment]", "B[Feedback]"));
     await store.complete(path, retry.id);
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await page.getByRole("button", { name: "Reopen", exact: true }).click();
     expect(sent.length).toBe(count + 1);
     await page.getByRole("button", { name: "Comment on diagram", exact: true }).click();
@@ -386,7 +395,7 @@ test("legacy unlinked feedback is actionable, and stale retarget submissions do 
     delete original.sourceExcerpt;
     await store.save(path, original);
     await writeFile(path, source.replace("formatted", "clearer"));
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await waitForSync(page);
     await expect(page.locator("#comments")).not.toContainText("Waiting for Copilot to resolve");
     const count = sent.length;
     await page.getByRole("button", { name: "Select current passage", exact: true }).click();
