@@ -17,12 +17,12 @@
   },
   "dependencies": {
     "@milkdown/kit": "^7.22.3",
-    "dompurify": "^3.3.0",
-    "markdown-it": "^14.3.2",
+    "dompurify": "^3.4.17",
+    "markdown-it": "^15.0.3",
     "mermaid": "^12.2.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.0",
-    "esbuild": "^0.25.11"
+    "@playwright/test": "^1.64.1",
+    "esbuild": "^0.28.2"
   }
 }
