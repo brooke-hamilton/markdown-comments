@@ -21,6 +21,8 @@ comment, and send a contextual edit request to the **current Copilot conversatio
 
 The canvas is an editable Milkdown/ProseMirror prototype: edit rendered Markdown and add margin comments in the same view, without switching modes. This uses our own editor inside the extension's isolated iframe, not the app's built-in editor.
 
+Comment headers show the timestamp without an avatar or user name, since the canvas is a single-user application.
+
 ## Editable Markdown prototype
 
 Edit headings, paragraphs, formatting, lists, tables, and code directly. Markdown input rules and undo/redo are available. Changes save automatically after 600 ms of idle time, with a save scheduled at least every two seconds during continuous editing. Saves are serialized, and typing can continue while a save is in flight. The header shows **Saving...**, **Saved**, or an explicit error; there are no normal Save, Refresh, or mode-switch buttons. **Ctrl+S / Cmd+S** can also flush pending changes without sending anything to Copilot.

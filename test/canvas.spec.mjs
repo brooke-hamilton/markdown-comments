@@ -105,6 +105,10 @@ test("posts selected text with source location while keeping the anchored commen
     expect(sent.at(-1)).toContain("markdown_comments_resolve_comment");
     expect(comment.resolved).toBe(false);
     await expect(page.locator(".comment.active")).toHaveCount(1);
+    const heading = page.locator("#comments .comment-heading");
+    await expect(heading.locator("small")).toHaveText(await page.evaluate((createdAt) => new Date(createdAt).toLocaleString(), comment.createdAt));
+    await expect(heading).not.toContainText("You");
+    await expect(page.locator("#comments .avatar")).toHaveCount(0);
     await expect(page.locator("#comments")).toContainText("Waiting for Copilot to resolve");
     await expect(page.getByRole("button", { name: "Resolve", exact: true })).toHaveCount(0);
     const text = await page.locator("#document strong").boundingBox();
