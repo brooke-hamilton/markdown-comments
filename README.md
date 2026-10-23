@@ -185,7 +185,7 @@ npm --userconfig "$HOME\.npmrc" run deploy:local
 
 Run `npm ci` initially or when dependencies need restoring, not before every deployment. Node.js 22.12.0+ is required. The command resolves its source from the script's location, builds the renderer, and runs unit tests before changing the installation. It uses the user-profile root `.npmrc` settings for npm subprocesses.
 
-Dependabot checks the root npm dependencies and GitHub Actions weekly using `.github/dependabot.yml`, grouping version updates and security updates separately within each ecosystem. npm version updates have a seven-day cooldown for new releases.
+Dependabot checks the root npm dependencies weekly using `.github/dependabot.yml`, with a seven-day cooldown for new releases.
 
 The configured npm feed does not yet provide Markdown-it 14.3.3. While retaining the feed-supported dependency, `markdown-reference.mjs` backports the upstream reference-parser fix for GHSA-gfr2-rv44-r23c and replaces that rule in every review rendering/source-mapping operation. Raw HTML remains disabled, preventing the separate inline-HTML parsing issue. npm audit still reports the installed package version because it cannot recognize application-level backports; the finding is not suppressed. Remove the backport after upgrading to a patched release available through the feed.
 
@@ -208,8 +208,6 @@ npx --userconfig "$HOME\.npmrc" playwright install chromium
 ```
 
 `npm run check` builds and runs both test suites. Browser tests use a local test document and a mock message sender; they do not call a model. Build first when running browser tests separately after renderer changes.
-
-The **Validate PR** GitHub Actions workflow runs `npm run check` on pull requests using Node.js 22 inside the official Playwright Ubuntu container, which includes browsers and their system dependencies without a separate installation step. The image is pinned by version and digest; keep its Playwright version aligned with `package-lock.json` when updating dependencies. Actions are pinned to full commit SHAs and maintained by Dependabot. It can also be run manually with an optional `target_branch`; leaving it empty validates the selected workflow branch.
 
 `extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns source mapping, revision-checked document saving, durable comments, configuration, and contextual requests; `server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI; `editor.mjs` integrates Milkdown, source-block preservation, and transaction-mapped comment anchors. The renderer bundles both JavaScript and CSS; deployment includes both assets. Agent actions `refresh` and `list_comments` expose the saved document's state, not an unsaved browser draft.
 
