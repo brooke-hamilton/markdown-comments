@@ -44,8 +44,7 @@ label { display: block; font-size: 12px; }
 #presets button { font-size: 12px; padding: 4px 8px; }
 .comment { position: absolute; left: 0; width: 100%; padding: 14px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 8px; background: var(--background-color-default, #fff); box-shadow: 0 2px 6px #0000000d; overflow-wrap: anywhere; z-index: 1; }
 .comment.active, .comment.draft { border-color: var(--review-accent); box-shadow: 0 0 0 1px var(--review-accent), 0 3px 10px #00000012; }
-.comment-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--review-tint); color: var(--review-accent); font-weight: 600; flex-shrink: 0; }
+.comment-heading { margin-bottom: 10px; }
 .comment-heading small { font-size: 11px; }
 .comment-label { display: block; font-size: 12px; margin-bottom: 6px; }
 .comment-feedback { margin: 8px 0 12px; white-space: pre-wrap; }

@@ -320,17 +320,9 @@ function renderComments() {
         });
         const heading = document.createElement("div");
         heading.className = "comment-heading";
-        const avatar = document.createElement("span");
-        avatar.className = "avatar";
-        avatar.textContent = "Y";
-        avatar.setAttribute("aria-hidden", "true");
-        const author = document.createElement("div");
-        const name = document.createElement("strong");
-        name.textContent = "You";
         const time = document.createElement("small");
         time.textContent = new Date(comment.createdAt).toLocaleString();
-        author.append(name, time);
-        heading.append(avatar, author);
+        heading.append(time);
         const label = document.createElement("strong");
         label.className = "comment-label";
         label.textContent = comment.label;
