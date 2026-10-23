@@ -26,7 +26,7 @@ Try `examples\welcome.md` for a sample document.
 ## Use
 
 1. Select text and choose **New comment**, or press **Ctrl+Alt+M** (**Cmd+Option+M** on Mac).
-2. Pick a feedback prompt or write your own, then choose **Post comment**.
+2. Write your feedback prompt, then choose **Post comment** (or select one of the customizable one-click prompts).
 3. Copilot receives the passage, source location, and feedback. The comment stays open until Copilot verifies the edit and resolves it.
 
 Use **Comment on diagram** for Mermaid feedback and **Show resolved / history** to revisit previous comments. Customize one-click prompts in `feedback.json`.
