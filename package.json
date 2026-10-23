@@ -18,7 +18,7 @@
   "dependencies": {
     "@milkdown/kit": "^7.22.3",
     "dompurify": "^3.3.0",
-    "markdown-it": "^14.3.2",
+    "markdown-it": "^15.0.3",
     "mermaid": "^12.2.0"
   },
   "devDependencies": {
