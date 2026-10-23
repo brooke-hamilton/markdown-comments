@@ -14,3 +14,15 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+      security-dependencies:
+        applies-to: security-updates
+        patterns:
+          - "*"
