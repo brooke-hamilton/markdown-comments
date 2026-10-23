@@ -1,0 +1,10 @@
+{
+  "name": "markdown-comments",
+  "description": "Review and edit Markdown with selection-based comments in a Copilot canvas.",
+  "homepage": "https://github.com/brooke-hamilton/markdown-comments",
+  "repository": "https://github.com/brooke-hamilton/markdown-comments",
+  "license": "MIT",
+  "extensions": [
+    ".github/extensions"
+  ]
+}

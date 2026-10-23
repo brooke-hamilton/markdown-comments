@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "esbuild ui.mjs --bundle --format=esm --outdir=dist --entry-names=app",
+    "build:release": "node scripts/build-release.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "test": "node --test test/*.test.mjs",
     "test:browser": "playwright test",
