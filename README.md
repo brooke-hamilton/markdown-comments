@@ -209,7 +209,7 @@ npx --userconfig "$HOME\.npmrc" playwright install chromium
 
 `npm run check` builds and runs both test suites. Browser tests use a local test document and a mock message sender; they do not call a model. Build first when running browser tests separately after renderer changes.
 
-The **Validate PR** GitHub Actions workflow runs `npm run check` on pull requests using Node.js 22 and Chromium on Ubuntu. Actions are pinned to full commit SHAs and maintained by Dependabot. It can also be run manually with an optional `target_branch`; leaving it empty validates the selected workflow branch.
+The **Validate PR** GitHub Actions workflow runs `npm run check` on pull requests using Node.js 22 inside the official Playwright Ubuntu container, which includes browsers and their system dependencies without a separate installation step. The image is pinned by version and digest; keep its Playwright version aligned with `package-lock.json` when updating dependencies. Actions are pinned to full commit SHAs and maintained by Dependabot. It can also be run manually with an optional `target_branch`; leaving it empty validates the selected workflow branch.
 
 `extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns source mapping, revision-checked document saving, durable comments, configuration, and contextual requests; `server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI; `editor.mjs` integrates Milkdown, source-block preservation, and transaction-mapped comment anchors. The renderer bundles both JavaScript and CSS; deployment includes both assets. Agent actions `refresh` and `list_comments` expose the saved document's state, not an unsaved browser draft.
 
