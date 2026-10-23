@@ -19,7 +19,7 @@ Ask Copilot:
 
 Then open a document:
 
-> Open `C:\absolute\path\to\document.md` in the Markdown comments canvas.
+> Open `<document name>` in the Markdown comments canvas.
 
 Try `examples\welcome.md` for a sample document.
 
