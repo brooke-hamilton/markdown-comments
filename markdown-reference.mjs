@@ -1,7 +1,7 @@
 /*
  * Backport of markdown-it's reference rule from commit
  * d99f48839d37af6fd8a2617516c43dab90755503 for GHSA-gfr2-rv44-r23c.
- * Only the import path differs from upstream.
+ * Only utility access differs from upstream.
  *
  * Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.
  *
@@ -26,8 +26,6 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
-import { isSpace, normalizeReference } from 'markdown-it/lib/common/utils.mjs'
-
 // CommonMark limits reference labels to 999 Unicode code points.
 const MAX_LABEL_LENGTH = 999
 
@@ -96,6 +94,7 @@ function getNextLinePos (state, nextLine) {
 }
 
 export default function reference (state, startLine, _endLine, silent) {
+  const { isSpace, normalizeReference } = state.md.utils
   const src = state.src
   let pos = state.bMarks[startLine] + state.tShift[startLine]
   let nextLine = startLine + 1
