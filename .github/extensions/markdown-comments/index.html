@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Markdown comments</title>
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+    <header>
+        <div><strong id="title">Markdown comments</strong><small id="path"></small></div>
+        <div class="document-actions">
+            <span id="edit-status" aria-live="polite"></span>
+            <button id="retry-save" type="button" hidden>Retry autosave</button>
+            <button id="reload-document" type="button" hidden>Use disk version</button>
+        </div>
+    </header>
+    <p id="notice" role="status" aria-live="polite" hidden></p>
+    <div id="selection-toolbar" role="toolbar" aria-label="Selected text" hidden>
+        <button id="new-comment" type="button" aria-keyshortcuts="Control+Alt+m Meta+Alt+m">New comment</button>
+    </div>
+    <main id="review-surface">
+        <article id="document" aria-label="Rendered Markdown"></article>
+        <svg id="connectors" aria-hidden="true"></svg>
+        <aside id="margin" aria-label="Document comments">
+            <div class="margin-heading">
+                <h2>Comments <span id="count"></span></h2>
+                <button id="show-resolved" type="button" aria-pressed="false" hidden>Show resolved</button>
+            </div>
+            <p id="empty-comments" class="hint">Select text, then choose <strong>New comment</strong> or press <kbd>Ctrl+Alt+M</kbd>. Your comment appears beside that passage.</p>
+            <section id="composer" class="comment draft" aria-label="New comment" hidden>
+                <blockquote id="selection"></blockquote>
+                <form id="feedback-form">
+                    <textarea id="feedback" aria-label="Custom feedback" maxlength="8000" rows="3" placeholder="Tell Copilot what to change..."></textarea>
+                    <div id="presets" aria-label="Standard feedback"></div>
+                    <div class="comment-actions">
+                        <button id="cancel-comment" type="button">Cancel</button>
+                        <button id="send" class="primary" type="submit" disabled>Post comment</button>
+                    </div>
+                </form>
+            </section>
+            <div id="comments"></div>
+        </aside>
+    </main>
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "markdown-comments-plugins",
+  "owner": {
+    "name": "brooke-hamilton"
+  },
+  "metadata": {
+    "description": "Markdown comments canvas for the GitHub Copilot app.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "markdown-comments",
+      "description": "Review and edit Markdown with selection-based comments in a Copilot canvas.",
+      "homepage": "https://github.com/brooke-hamilton/markdown-comments",
+      "repository": "https://github.com/brooke-hamilton/markdown-comments",
+      "license": "MIT",
+      "extensions": [
+        ".github/extensions"
+      ],
+      "version": "0.1.0+c2ce30b",
+      "source": "./"
+    }
+  ]
+}
