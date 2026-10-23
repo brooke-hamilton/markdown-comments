@@ -418,6 +418,51 @@ test("duplicate paragraphs retain their individual whitespace after an external 
     expect(await readFile(path, "utf8")).toBe(`${duplicate}\nExternal addition.\n`.replace("passage to improve.", "passage to improve. Added manually."));
 });
 
+for (const action of ["Reopen", "Retry"]) {
+    test(`${action} cannot overwrite an active comment draft`, async ({ page }) => {
+        await select(page, "context");
+        if (action === "Retry") sendError = "Sender disconnected";
+        await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+        if (action === "Retry") {
+            await expect(page.locator("#notice")).toContainText("Sender disconnected");
+            await page.getByRole("button", { name: "Cancel", exact: true }).click();
+            sendError = undefined;
+        } else {
+            await expect(page.locator("#composer")).toBeHidden();
+            await store.resolve(path, { id: (await store.comments(path))[0].id, resolved: true });
+            await expect(page.locator("#comments .comment")).toHaveCount(0, { timeout: 10000 });
+            await page.getByRole("button", { name: /Show resolved/ }).click();
+        }
+        await select(page, "formatted");
+        await page.getByLabel("Custom feedback", { exact: true }).fill("Keep the original target.");
+        const requests = [];
+        page.on("request", (request) => { if (request.url().endsWith("/reopen")) requests.push(request); });
+        await page.getByRole("button", { name: action, exact: true }).click();
+        await expect(page.locator("#notice")).toContainText("Post or cancel the current comment");
+        await expect(page.locator("#selection")).toHaveText("formatted");
+        await expect(page.getByLabel("Custom feedback", { exact: true })).toHaveValue("Keep the original target.");
+        expect(requests).toHaveLength(0);
+        await page.getByRole("button", { name: "Post comment", exact: true }).click();
+        await expect(page.locator("#composer")).toBeHidden();
+        expect((await store.comments(path)).find((comment) => comment.instruction === "Keep the original target.")).toMatchObject({
+            quote: "formatted", sourceExcerpt: "A **formatted** passage to improve.",
+        });
+    });
+}
+
+test("editing a shortcut reference paragraph preserves its link syntax", async ({ page }) => {
+    const shortcut = "# References\n\nSee [guide].\n\n[guide]: /docs\n";
+    await writeFile(path, shortcut);
+    await expect(page.locator(".raw-source").first()).toHaveText("See [guide].\n", { timeout: 10000 });
+    await page.locator(".raw-source").first().click();
+    await page.keyboard.press("Home");
+    await page.keyboard.type("Please ");
+    await saved(page);
+    expect(await readFile(path, "utf8")).toBe(shortcut.replace("See [guide].", "Please See [guide]."));
+    await page.reload();
+    await expect(page.locator(".raw-source").first()).toHaveText("Please See [guide].\n");
+});
+
 test("unchanged diagrams retain their rendered widget while earlier text shifts their positions", async ({ page }) => {
     const widget = await page.locator(".editor-diagram").elementHandle();
     const svg = await page.locator(".editor-diagram svg").elementHandle();
@@ -435,6 +480,40 @@ test("unchanged diagrams retain their rendered widget while earlier text shifts 
 });
 
 for (const container of ["blockquote", "list"]) {
+    for (const passage of ["Before diagram.", "After diagram."]) {
+        test(`${container} text ${passage} keeps widget-free anchors after reload and external updates`, async ({ page }) => {
+            const nested = container === "blockquote" ?
+                "> Before diagram.\n>\n> ```mermaid\n> flowchart LR\n> A[PreviewOnly]-->B\n> ```\n>\n> After diagram.\n" :
+                "- Before diagram.\n\n  ```mermaid\n  flowchart LR\n  A[PreviewOnly]-->B\n  ```\n\n  After diagram.\n";
+            await writeFile(path, `# Nested text\n\n${nested}`);
+            await expect(page.locator(".ProseMirror h1")).toHaveText("Nested text", { timeout: 10000 });
+            await expect(page.locator(".editor-diagram svg")).toBeVisible();
+            await select(page, passage);
+            await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+            await expect(page.locator("#composer")).toBeHidden();
+            const comment = (await store.comments(path))[0];
+            expect(comment.anchor.prefix + comment.anchor.suffix).not.toContain("Comment on diagram");
+            const text = await page.locator(".ProseMirror").evaluate((element) => {
+                const block = element.querySelector("blockquote, ul").cloneNode(true);
+                for (const widget of block.querySelectorAll(".editor-diagram")) widget.remove();
+                return block.textContent;
+            });
+            const offset = text.indexOf(passage);
+            expect(comment.anchor).toMatchObject({
+                prefix: text.slice(0, offset), suffix: text.slice(offset + passage.length),
+                startBlockOffset: offset, endBlockOffset: offset + passage.length,
+            });
+            await page.reload();
+            await expect(page.locator("#comments .comment")).toBeVisible();
+            await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+            await expect(page.locator("#connectors path")).toHaveCount(1);
+            await writeFile(path, `# Intro\n\n# Nested text\n\n${nested}`);
+            await expect(page.locator(".ProseMirror h1")).toHaveCount(2, { timeout: 10000 });
+            await expect(page.locator("#comments .comment")).not.toHaveClass(/outdated/);
+            expect(await page.evaluate(() => [...CSS.highlights.get("review-comments")][0].toString())).toBe(passage);
+        });
+    }
+
     test(`nested ${container} diagrams retain full source ranges and anchors`, async ({ page }) => {
         const fence = container === "blockquote" ? "> ```mermaid\n> flowchart LR\n> A-->B\n> ```" :
             "- ```mermaid\n  flowchart LR\n  A-->B\n  ```";

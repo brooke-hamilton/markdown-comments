@@ -249,6 +249,7 @@ function retarget(comment) {
 
 async function reopen(comment) {
     if (busy) return;
+    if (draftOpen) return notice("Post or cancel the current comment before selecting another passage.");
     let selection = selectionFor(comment);
     if (!selection || !comment.canReopen) return retarget(comment);
     busy = true;

@@ -88,7 +88,19 @@ export function editingBlocks(source) {
     };
     const frontmatter = /^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)(?:\r?\n|$)/.exec(source);
     if (frontmatter) add(0, frontmatter[0].length, true);
-    for (const token of md.parse(source, {})) {
+    const env = {};
+    const tokens = md.parse(source, env);
+    const referenceBlocks = new Set();
+    let blockStart;
+    for (const token of tokens) {
+        if (token.level === 0 && token.nesting >= 0 && token.map) blockStart = token.map[0];
+        if (env.references && token.type === "inline") {
+            const links = (children) => children.filter((child) => child.type === "link_open").length;
+            const count = links(token.children);
+            if (count && count > links(md.parseInline(token.content, {})[0].children)) referenceBlocks.add(blockStart);
+        }
+    }
+    for (const token of tokens) {
         if (token.level !== 0 || token.nesting < 0 || !token.map) continue;
         const [start, end] = token.map;
         const from = offsets[start], to = offsets[end];
@@ -96,7 +108,7 @@ export function editingBlocks(source) {
         const text = source.slice(from, to);
         const code = token.type === "fence" || token.type === "code_block";
         const raw = code ? token.type === "fence" && /\s/.test(token.info.trim()) :
-            hasReference(text) || /<\/?[a-zA-Z!]|<!--|!\[|^ *:{3,}|^ *(?:import|export) |(?:^|\n) *\$\$/m.test(text);
+            referenceBlocks.has(start) || hasReference(text) || /<\/?[a-zA-Z!]|<!--|!\[|^ *:{3,}|^ *(?:import|export) |(?:^|\n) *\$\$/m.test(text);
         add(from, to, raw);
     }
     if (source.slice(cursor).trim()) add(cursor, source.length, true);

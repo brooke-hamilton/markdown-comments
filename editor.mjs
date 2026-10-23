@@ -24,6 +24,12 @@ function domRange(view, from, to) {
     return range;
 }
 
+function rangeText(range) {
+    const content = range.cloneContents();
+    for (const widget of content.querySelectorAll(".editor-diagram")) widget.remove();
+    return content.textContent;
+}
+
 export async function createMarkdownEditor({ root, source, editing, onChange, onError, renderDiagram, onDiagram }) {
     let ready = false, instance, view, initialDoc;
     let readonly = false;
@@ -183,14 +189,20 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
 
     function snapshot() {
         if (view.state.doc.eq(initialDoc)) return { source: baseSource, blocks: baseRecords, doc: view.state.doc };
+        const byPosition = new Map(), byNode = new Map();
+        for (const record of records) {
+            if (!byPosition.has(record.pos)) byPosition.set(record.pos, []);
+            byPosition.get(record.pos).push(record);
+            if (!byNode.has(record.node)) byNode.set(record.node, record);
+        }
         const blocks = [];
         let result = "";
         let previousRecord;
         instance.action((ctx) => {
             const serialize = ctx.get(serializerCtx);
             view.state.doc.forEach((node, pos) => {
-                const record = records.find((entry) => entry.pos === pos && entry.node.eq(node)) ??
-                    records.find((entry) => entry.node === node) ?? records.find((entry) => entry.pos === pos);
+                const positioned = byPosition.get(pos);
+                const record = positioned?.find((entry) => entry.node.eq(node)) ?? byNode.get(node) ?? positioned?.[0];
                 const text = record?.node.eq(node) ? record.source : node.type.name === "raw_source" ? node.textContent :
                     serialize(view.state.schema.nodes.doc.create(null, [node])).replace(/\n+$/, "").replace(/\n/g, newline) + newline;
                 let prefix = record?.prefix ?? "";
@@ -327,14 +339,14 @@ export async function createMarkdownEditor({ root, source, editing, onChange, on
             const startLine = current.source.slice(0, first.from).split("\n").length - 1;
             const endLine = Math.min(lines.length, current.source.slice(0, last.to).replace(/\r?\n$/, "").split("\n").length);
             const range = domRange(view, anchor.from, anchor.to);
-            const quote = range.toString();
-            const before = domRange(view, Math.min(first.pos + 1, anchor.from), anchor.from).toString();
-            const after = domRange(view, anchor.to, Math.max(anchor.to, last.pos + last.node.nodeSize - 1)).toString();
-            const endBlockOffset = domRange(view, Math.min(last.pos + 1, anchor.to), anchor.to).toString().length;
+            const quote = rangeText(range);
+            const before = rangeText(domRange(view, Math.min(first.pos + 1, anchor.from), anchor.from));
+            const after = rangeText(domRange(view, anchor.to, Math.max(anchor.to, last.pos + last.node.nodeSize - 1)));
+            const endBlockOffset = rangeText(domRange(view, Math.min(last.pos + 1, anchor.to), anchor.to)).length;
             const documentBefore = document.createRange();
             documentBefore.selectNodeContents(root);
             documentBefore.setEnd(range.startContainer, range.startOffset);
-            const startOffset = documentBefore.toString().length;
+            const startOffset = rangeText(documentBefore).length;
             return {
                 kind: "text", quote, startLine, endLine, startOffset, endOffset: startOffset + quote.length,
                 anchor: { prefix: before.slice(-160), suffix: after.slice(0, 160), startBlockOffset: before.length, endBlockOffset },

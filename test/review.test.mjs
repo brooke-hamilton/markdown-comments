@@ -60,6 +60,18 @@ test("partitions editable Markdown without dropping bytes or unsupported syntax"
     }
 });
 
+test("preserves shortcut reference blocks using document definitions", () => {
+    for (const passage of ["See [guide].", "See [GuIdE].", "> See [guide].", "- See [guide].", "See [long\n label].", "See [escaped\\[label]."]) {
+        const source = `${passage}\n\n[guide]: /docs\n[long label]: /long\n[escaped\\[label]: /escaped\n`;
+        const { blocks, tail } = editingBlocks(source);
+        assert.equal(blocks[0].raw, true, passage);
+        assert.equal(blocks.map((block) => block.prefix + block.source).join("") + tail, source);
+    }
+    for (const passage of ["See [unknown].", "See [guide](/inline).", "See `[guide]`."]) {
+        assert.equal(editingBlocks(`${passage}\n\n[guide]: /docs\n`).blocks[0].raw, false, passage);
+    }
+});
+
 test("saves document revisions without changing comments and survives reopening", async (t) => {
     const f = await fixture(t);
     const comment = await f.store.submit(f.path, f.input);
