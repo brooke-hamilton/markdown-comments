@@ -1,0 +1,66 @@
+name: Publish plugin
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-plugin
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check packaging and runtime
+        run: npm test
+
+      - name: Build plugin
+        run: npm run build:release -- "$RUNNER_TEMP/markdown-comments-plugin"
+
+      - name: Publish generated dist branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/markdown-comments-plugin"
+          git init --initial-branch=dist
+          git remote add origin "${SERVER_URL}/${REPOSITORY}.git"
+          git config --local "credential.${SERVER_URL}.helper" ""
+          git config --local --add "credential.${SERVER_URL}.helper" '!gh auth git-credential'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          existing="$(git ls-remote origin refs/heads/dist)"
+          if [ -n "$existing" ]; then
+            git fetch --depth=1 origin refs/heads/dist
+            git update-ref refs/heads/dist FETCH_HEAD
+          fi
+          git add --all --force
+          if ! git diff --cached --quiet; then
+            git commit -s -m "Build Markdown comments from ${SOURCE_SHA}"
+            git push origin HEAD:refs/heads/dist
+          fi
