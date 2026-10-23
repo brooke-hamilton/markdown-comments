@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, readdir, realpath, mkdir, rename, writeFile, stat, rmdir } from "node:fs/promises";
+import { readFile, readdir, realpath, mkdir, rename, writeFile, stat, rmdir, rm } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import MarkdownIt from "markdown-it";
+import reference from "./markdown-reference.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
@@ -16,6 +17,7 @@ export class ReviewError extends Error {
 }
 
 const md = new MarkdownIt({ html: false, linkify: true, typographer: false });
+md.block.ruler.at("reference", reference);
 // Do not fetch document images from third-party servers just by opening a review.
 md.renderer.rules.image = (tokens, index) => `<span class="image-placeholder">[Image: ${md.utils.escapeHtml(tokens[index].content)}]</span>`;
 const defaultLinkOpen = md.renderer.rules.link_open;
@@ -49,6 +51,68 @@ md.core.ruler.push("review_ranges", (state) => {
 
 export function renderDocument(source) {
     return md.render(source);
+}
+
+function hasReference(source) {
+    let opening = false, closing = false, referenceLabel = false;
+    for (const character of source) {
+        if (referenceLabel && character === "]") return true;
+        if (closing) {
+            if (character === ":") return true;
+            if (character === "[") referenceLabel = true;
+            if (/\s/.test(character)) continue;
+            closing = false;
+        }
+        if (character === "\n") opening = referenceLabel = false;
+        else if (character === "[") opening = true;
+        else if (character === "]" && opening) {
+            opening = false;
+            closing = true;
+        }
+    }
+    return false;
+}
+
+export function editingBlocks(source) {
+    const lines = source.split("\n");
+    const offsets = [0];
+    for (let index = 0; index < lines.length; index++) offsets.push(offsets[index] + lines[index].length + (index < lines.length - 1 ? 1 : 0));
+    const blocks = [];
+    let cursor = 0;
+    const add = (from, to, raw = false) => {
+        if (to <= from) return;
+        const gap = source.slice(cursor, from);
+        if (gap.trim()) blocks.push({ from: cursor, to: from, source: gap, prefix: "", raw: true });
+        blocks.push({ from, to, source: source.slice(from, to), prefix: gap.trim() ? "" : gap, raw });
+        cursor = to;
+    };
+    const frontmatter = /^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)(?:\r?\n|$)/.exec(source);
+    if (frontmatter) add(0, frontmatter[0].length, true);
+    const env = {};
+    const tokens = md.parse(source, env);
+    const referenceBlocks = new Set();
+    let blockStart;
+    for (const token of tokens) {
+        if (token.level === 0 && token.nesting >= 0 && token.map) blockStart = token.map[0];
+        if (env.references && token.type === "inline") {
+            const links = (children) => children.filter((child) => child.type === "link_open").length;
+            const count = links(token.children);
+            if (count && count > links(md.parseInline(token.content, {})[0].children)) referenceBlocks.add(blockStart);
+        }
+    }
+    for (const token of tokens) {
+        if (token.level !== 0 || token.nesting < 0 || !token.map) continue;
+        const [start, end] = token.map;
+        const from = offsets[start], to = offsets[end];
+        if (from < cursor) continue;
+        const text = source.slice(from, to);
+        const code = token.type === "fence" || token.type === "code_block";
+        const raw = code ? token.type === "fence" && /\s/.test(token.info.trim()) :
+            referenceBlocks.has(start) || hasReference(text) || /<\/?[a-zA-Z!]|<!--|!\[|^ *:{3,}|^ *(?:import|export) |(?:^|\n) *\$\$/m.test(text);
+        add(from, to, raw);
+    }
+    if (source.slice(cursor).trim()) add(cursor, source.length, true);
+    return { blocks, tail: source.slice(cursor) };
 }
 
 export function validateConfig(config) {
@@ -114,11 +178,47 @@ export class ReviewStore {
         return {
             ...doc,
             html: renderDocument(doc.source),
+            editing: editingBlocks(doc.source),
             prompts: validateConfig(JSON.parse(await readFile(this.configPath, "utf8"))),
             comments: (await this.comments(doc.path)).map((comment) => ({
                 ...comment, canReopen: Boolean(this.retryTarget(doc, comment)),
             })),
         };
+    }
+
+    async saveDocument(path, input) {
+        if (typeof input.revision !== "string" || typeof input.source !== "string") throw new ReviewError("A source string and base revision are required.");
+        if (Buffer.byteLength(input.source, "utf8") > MAX_DOCUMENT_BYTES) throw new ReviewError("Document exceeds the 2 MiB review limit.", 413);
+        const doc = await this.document(path);
+        return this.locked(doc.path, async () => {
+            const directory = this.commentsPath(doc.path);
+            await mkdir(directory, { recursive: true });
+            const lock = join(directory, "document.lock");
+            try {
+                await mkdir(lock);
+            } catch (error) {
+                if (error.code === "EEXIST") throw new ReviewError("Another canvas is saving this document. Try again when it finishes.", 409);
+                throw error;
+            }
+            let temporary;
+            try {
+                const current = await this.document(doc.path);
+                if (input.revision !== current.revision) throw new ReviewError("The document changed on disk. Your draft is preserved. Copy it before choosing Use disk version to reconcile the changes.", 409);
+                if (input.source !== current.source) {
+                    const info = await stat(doc.path);
+                    temporary = join(dirname(doc.path), `.${basename(doc.path)}.${randomUUID()}.tmp`);
+                    await writeFile(temporary, input.source, { encoding: "utf8", flag: "wx", mode: info.mode });
+                    if ((await this.document(doc.path)).revision !== input.revision) throw new ReviewError("The document changed during saving. Your draft is preserved.", 409);
+                    await rename(temporary, doc.path);
+                }
+                const saved = await this.document(doc.path);
+                if (saved.revision !== revision(input.source)) throw new ReviewError("The document changed immediately after saving. Your local draft is preserved; copy it before choosing Use disk version to reconcile the changes.", 409);
+                return { ...saved, html: renderDocument(saved.source), editing: editingBlocks(saved.source) };
+            } finally {
+                if (temporary) await rm(temporary, { force: true });
+                await rmdir(lock);
+            }
+        });
     }
 
     retryTarget(doc, comment) {
@@ -163,8 +263,8 @@ export class ReviewStore {
             if (!parent) throw new ReviewError("Comment not found.", 404);
             if (parent.reopenedAs) {
                 const existing = current.comments.find((comment) => comment.id === parent.reopenedAs);
-                if (!existing) throw new ReviewError("The saved retry is missing. Refresh the document.", 409);
-                if (existing.status !== "sent") throw new ReviewError("The previous retry was not confirmed. Refresh and check its delivery status.", 409);
+                if (!existing) throw new ReviewError("The saved retry is missing. Wait for the document to update automatically and check its delivery status.", 409);
+                if (existing.status !== "sent") throw new ReviewError("The previous retry was not confirmed. Check its delivery status and the conversation before trying again.", 409);
                 return existing;
             }
             if (!parent.resolved && parent.status !== "failed" && input.retarget !== true) {
@@ -178,7 +278,7 @@ export class ReviewStore {
             }
             const selection = input.selection;
             if (!selection || selection.revision !== current.revision) {
-                throw new ReviewError("The document changed. Refresh and select the current passage again.", 409);
+                throw new ReviewError("The document changed. Wait for the automatic update and select the current passage again.", 409);
             }
             if (input.retarget !== true) {
                 const target = this.retryTarget(current, parent);
@@ -212,7 +312,7 @@ export class ReviewStore {
 
     async submitCurrent(current, input, parent) {
         const path = current.path;
-        if (input.revision !== current.revision) throw new ReviewError("The document changed. Refresh and select the passage again.", 409);
+        if (input.revision !== current.revision) throw new ReviewError("The document changed. Wait for the automatic update and select the passage again.", 409);
         const { startLine, endLine, quote, startOffset, endOffset } = input;
         const lines = current.source.split("\n");
         if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 0 || endLine <= startLine || endLine > lines.length ||
@@ -231,7 +331,7 @@ export class ReviewStore {
         let label = "Custom feedback";
         if (input.promptId !== undefined) {
             const preset = current.prompts.find((item) => item.id === input.promptId);
-            if (!preset) throw new ReviewError("That feedback prompt no longer exists. Refresh the document.");
+            if (!preset) throw new ReviewError("That feedback prompt no longer exists. Wait for the feedback buttons to update automatically.");
             instruction = preset.prompt;
             label = preset.label;
         } else {

@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ReviewStore, renderDocument, validateConfig } from "../review.mjs";
+import { ReviewStore, renderDocument, validateConfig, editingBlocks } from "../review.mjs";
 import { startServer } from "../server.mjs";
+import { createConnection } from "node:net";
+import { once } from "node:events";
 
 async function fixture(t, send = async () => "message-1") {
     const root = await mkdtemp(join(tmpdir(), "markdown-comments-test-"));
@@ -33,6 +35,133 @@ test("validates editable configuration, including duplicate ids", () => {
     assert.equal(validateConfig({ prompts: [] }).length, 0);
     assert.throws(() => validateConfig({ prompts: [{ id: "a", label: "", prompt: "x" }] }));
     assert.throws(() => validateConfig({ prompts: [{ id: "a", label: "A", prompt: "x" }, { id: "a", label: "B", prompt: "y" }] }));
+});
+
+test("partitions editable Markdown without dropping bytes or unsupported syntax", () => {
+    for (const source of [
+        "", "\n\n", "\uFEFF---\r\ntitle: Example\r\n---\r\n\r\n# Heading\r\n\r\nA paragraph.\r\n",
+        "# Title\n\nA [reference][id].\n\n[id]: https://example.com\n\n<!-- keep -->\n",
+        ":::custom\nunknown syntax\n:::\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n~~~mermaid\nflowchart LR\nA-->B\n~~~\n",
+    ]) {
+        const { blocks, tail } = editingBlocks(source);
+        assert.equal(blocks.map((block) => block.prefix + block.source).join("") + tail, source);
+        for (const block of blocks) assert.equal(source.slice(block.from, block.to), block.source);
+    }
+    assert.equal(editingBlocks("---\ntitle: Keep\n---\n").blocks[0].raw, true);
+    assert.equal(editingBlocks("<!-- private -->\n").blocks[0].raw, true);
+    assert.equal(editingBlocks("[ref]: https://example.com\n").blocks[0].raw, true);
+    assert.equal(editingBlocks("```html\n<div>Safe code</div>\n```\n").blocks[0].raw, false);
+    assert.equal(editingBlocks("```js title=example\nconst value = 1;\n```\n").blocks[0].raw, true);
+    for (const source of ["[label][ref]\n", "[label][]\n", "[outer [inner][ref]\n", "[label] \n [ref]\n"]) {
+        assert.equal(editingBlocks(source).blocks[0].raw, true, source);
+    }
+    for (const source of ["[label](url)\n", "[label][unfinished\n", "[".repeat(32000)]) {
+        assert.equal(editingBlocks(source).blocks[0].raw, false, source);
+    }
+});
+
+test("preserves shortcut reference blocks using document definitions", () => {
+    for (const passage of ["See [guide].", "See [GuIdE].", "> See [guide].", "- See [guide].", "See [long\n label].", "See [escaped\\[label]."]) {
+        const source = `${passage}\n\n[guide]: /docs\n[long label]: /long\n[escaped\\[label]: /escaped\n`;
+        const { blocks, tail } = editingBlocks(source);
+        assert.equal(blocks[0].raw, true, passage);
+        assert.equal(blocks.map((block) => block.prefix + block.source).join("") + tail, source);
+    }
+    for (const passage of ["See [unknown].", "See [guide](/inline).", "See `[guide]`."]) {
+        assert.equal(editingBlocks(`${passage}\n\n[guide]: /docs\n`).blocks[0].raw, false, passage);
+    }
+});
+
+test("saves document revisions without changing comments and survives reopening", async (t) => {
+    const f = await fixture(t);
+    const comment = await f.store.submit(f.path, f.input);
+    const source = `${f.source}\nSaved from Milkdown.\n`;
+    const saved = await f.store.saveDocument(f.path, { source, revision: f.state.revision });
+    assert.equal(saved.source, source);
+    assert.notEqual(saved.revision, f.state.revision);
+    assert.equal(await readFile(f.path, "utf8"), source);
+    assert.equal((await f.store.comments(f.path))[0].id, comment.id);
+    assert.equal((await f.store.comments(f.path))[0].resolved, false);
+    assert.equal((await f.store.state(f.path)).source, source);
+    assert.equal((await f.store.saveDocument(f.path, { source, revision: saved.revision })).revision, saved.revision);
+});
+
+test("rejects stale, oversized and invalid document writes without touching disk", async (t) => {
+    const f = await fixture(t);
+    for (const input of [{}, { source: null, revision: f.state.revision }, { source: "x", revision: 42 }, { source: "x".repeat(2 * 1024 * 1024 + 1), revision: f.state.revision }]) {
+        await assert.rejects(f.store.saveDocument(f.path, input));
+        assert.equal(await readFile(f.path, "utf8"), f.source);
+    }
+    await writeFile(f.path, "External change\n");
+    await assert.rejects(f.store.saveDocument(f.path, { source: "Local draft\n", revision: f.state.revision }), /document changed on disk/);
+    assert.equal(await readFile(f.path, "utf8"), "External change\n");
+});
+
+test("serializes saves and guards writes across independent providers", async (t) => {
+    const f = await fixture(t);
+    const results = await Promise.allSettled([
+        f.store.saveDocument(f.path, { source: "First draft\n", revision: f.state.revision }),
+        f.store.saveDocument(f.path, { source: "Second draft\n", revision: f.state.revision }),
+    ]);
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    const winningSource = results.find((result) => result.status === "fulfilled").value.source;
+    assert.equal(await readFile(f.path, "utf8"), winningSource);
+    const lock = join(f.store.commentsPath(f.state.path), "document.lock");
+    await mkdir(lock);
+    const other = new ReviewStore({ storageRoot: join(f.root, "comments"), configPath: f.configPath, send: async () => "" });
+    await assert.rejects(other.saveDocument(f.path, { source: "Other draft\n", revision: (await f.store.document(f.path)).revision }), /Another canvas is saving/);
+    assert.equal(await readFile(f.path, "utf8"), winningSource);
+});
+
+test("does not report an externally replaced post-save document as the saved draft", async (t) => {
+    const f = await fixture(t);
+    const document = f.store.document.bind(f.store);
+    let reads = 0;
+    f.store.document = async (path) => {
+        if (++reads === 4) await writeFile(path, "External replacement\n");
+        return document(path);
+    };
+    await assert.rejects(f.store.saveDocument(f.path, { source: "Local draft\n", revision: f.state.revision }), /changed immediately after saving/);
+    assert.equal(await readFile(f.path, "utf8"), "External replacement\n");
+});
+
+test("document HTTP writes are bound to the opened path and require same-origin JSON", async (t) => {
+    const f = await fixture(t);
+    const otherPath = join(f.root, "other.md");
+    await writeFile(otherPath, "Keep other document");
+    const entry = await startServer({ path: f.path, store: f.store });
+    t.after(() => entry.close());
+    const input = { source: "Saved through HTTP\n", revision: f.state.revision, path: otherPath };
+    for (const origin of [undefined, "https://example.com"]) {
+        const response = await fetch(`${entry.url}document`, {
+            method: "POST", headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(input),
+        });
+        assert.equal(response.status, 403);
+    }
+    const response = await fetch(`${entry.url}document`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(entry.url).origin }, body: JSON.stringify(input),
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).source, input.source);
+    assert.equal(await readFile(otherPath, "utf8"), "Keep other document");
+    assert.equal(await readFile(f.path, "utf8"), input.source);
+    const large = "# Large document\n\n" + "x".repeat(160 * 1024);
+    const largeResponse = await fetch(`${entry.url}document`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(entry.url).origin },
+        body: JSON.stringify({ source: large, revision: (await f.store.document(f.path)).revision }),
+    });
+    assert.equal(largeResponse.status, 200);
+    assert.equal(await readFile(f.path, "utf8"), large);
+});
+
+test("closing a canvas releases speculative browser connections without waiting for request timeout", async (t) => {
+    const f = await fixture(t);
+    const entry = await startServer({ path: f.path, store: f.store });
+    const socket = createConnection({ host: "127.0.0.1", port: Number(new URL(entry.url).port) });
+    t.after(() => socket.destroy());
+    await once(socket, "connect");
+    await entry.close();
+    assert.equal(entry.server.listening, false);
 });
 
 test("persists contextual custom feedback by canonical document identity", async (t) => {

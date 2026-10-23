@@ -19,15 +19,29 @@ comment, and send a contextual edit request to the **current Copilot conversatio
 - Automatic preview updates after file changes, with stale-selection protection.
 - Local, bundled rendering: no CDN calls or remote image fetching.
 
-This first version is a **review canvas, not a direct text editor**. The canvas
-API provides an isolated iframe, not an extensible copy of the app's built-in
-Markdown editor. Copilot edits the original file through its normal tools,
-permissions, and conversation mode.
+The canvas is an editable Milkdown/ProseMirror prototype: edit rendered Markdown and add margin comments in the same view, without switching modes. This uses our own editor inside the extension's isolated iframe, not the app's built-in editor.
+
+## Editable Markdown prototype
+
+Edit headings, paragraphs, formatting, lists, tables, and code directly. Markdown input rules and undo/redo are available. Changes save automatically after 600 ms of idle time, with a save scheduled at least every two seconds during continuous editing. Saves are serialized, and typing can continue while a save is in flight. The header shows **Saving...**, **Saved**, or an explicit error; there are no normal Save, Refresh, or mode-switch buttons. **Ctrl+S / Cmd+S** can also flush pending changes without sending anything to Copilot.
+
+Select text in the editor and use **New comment** or **Ctrl+Alt+M / Cmd+Option+M** as usual. The editor pauses while the comment composer is open. Posting feedback first saves the draft and then sends the selection with its saved source range and revision. Failed saves send no feedback and leave both the document draft and comment composer intact. A successful save followed by failed feedback delivery leaves the document saved and reports the delivery error separately.
+
+Existing comment ranges move through local ProseMirror transactions. Deleting a target unlinks its comment rather than attaching it to another occurrence. Original quotes and review history are preserved; manually editing a target does not resolve its comment. After an external update or reopening the document, changed targets can remain unlinked and require explicit reselection. The prototype does not persist live editor positions or draft undo history.
+
+Mermaid fences show a rendered preview above their editable code. Change the code to update the diagram, or choose **Comment on diagram** to comment on the complete fence. Malformed diagrams show an error without preventing source editing.
+
+Unchanged top-level source blocks and their surrounding whitespace are retained verbatim, including CRLF line endings. Changed rich-text blocks are serialized by Milkdown and can normalize Markdown syntax inside those blocks. YAML front matter, HTML, images, reference-style links/definitions, code fences with additional metadata, and detected custom directives or math blocks use labeled, editable **Preserved Markdown source** blocks instead of being converted into rich text. Other unfamiliar syntax may appear as literal text; this is not a general lossless Markdown editor. Paste accepts plain text only; file/HTML drops and image uploads are not supported. Remote images remain blocked.
+
+The canvas checks disk every two seconds while visible. Clean external changes update the existing editor automatically, preserving the caret or selection where possible and starting a new undo history so undo cannot overwrite an external revision. These updates do not trigger echo saves. If there are unsaved local edits or an open comment composer, the canvas preserves them and shows a conflict instead. **Use disk version** appears only for conflicts and asks for confirmation before discarding a local draft or comment; copy any edits or feedback you want to keep first. Canceling a comment allows a deferred clean update to load automatically. There is no automatic merge.
+
+Failed saves remain visibly unsaved and expose **Retry autosave** rather than repeatedly retrying in the background. Saves use a revision check, a shared canvas-save lock, and a temporary file renamed into place; noncooperating external editors are not governed by that lock, so this is not a cross-application atomic compare-and-swap guarantee.
+
+Unsaved drafts exist only in the open panel. The browser is asked to warn before unloading a dirty editor, but the host may close a panel without presenting that warning. Wait for **Saved**, or copy an unsaved draft before closing, reloading extensions, or restarting the app; crash recovery is not implemented. The prototype retains the existing 2 MiB document limit.
 
 ## Install at user scope
 
-Requires Node.js 22+ with npm, and a Copilot app/runtime supporting extension
-canvases. Canvas APIs are experimental.
+Requires Node.js 22.12.0+ with npm, and a Copilot app/runtime supporting extension canvases. Canvas APIs are experimental.
 
 Clone the repository into your Copilot user extensions directory:
 
@@ -93,11 +107,7 @@ Feedback across formatted text or multiple paragraphs retains the rendered
 quote and enclosing source blocks rather than pretending rendered character
 offsets are raw Markdown offsets.
 
-Click highlighted text to focus its comment, or a comment to return to its
-passage. Comments move with their anchors when the document is resized;
-overlapping balloons stack without covering each other. Narrow views retain
-the document and comment margin side by side with horizontal scrolling.
-**Cancel** or **Escape** discards an unposted comment.
+Click a comment to return to its passage and activate its linked highlight. Clicking document text positions the caret instead of taking over editing. Comments move with their anchors when the document is resized; overlapping balloons stack without covering each other. Narrow views retain the document and comment margin side by side with horizontal scrolling. **Cancel** or **Escape** discards an unposted comment.
 
 **Sent** means the runtime accepted the message, not that an edit succeeded.
 Feedback is queued in the current conversation so it does not interrupt an
@@ -113,14 +123,7 @@ directory; updates then fail explicitly instead of risking another send.
 Only remove that specific empty lock directory after confirming no provider is
 still updating the comment and checking delivery in the conversation.
 
-The preview polls disk every two seconds while visible. Auto-refresh pauses
-while a passage is selected so typing a comment does not lose its context.
-If the file changed, sending is rejected; use **Refresh** and select it again.
-Comments on earlier revisions keep their original quote and are labeled as
-outdated if their text changed or is ambiguous. An unchanged quote can reattach
-when its text and surrounding context identify exactly one passage. An unlinked
-comment stays visible near its previous position with an explicit retarget action;
-the preview does not infer completion from file changes or model inactivity.
+Disk updates are automatic, including while text is selected; an open comment composer or unsaved document draft defers replacement to protect local work. Sending checks the saved revision and rejects stale feedback. Comments on earlier revisions keep their original quote and are labeled as outdated if their text changed or is ambiguous. An unchanged quote can reattach when its source and surrounding context identify exactly one passage. An unlinked comment stays visible near its previous position with an explicit retarget action; the canvas does not infer completion from file changes or model inactivity.
 
 The agent tool `markdown_comments_resolve_comment` takes `path` and `commentId`
 from the feedback request. Copilot is instructed to call it only after making
@@ -151,7 +154,7 @@ reported, not silently replaced with defaults. Custom feedback is limited to
 
 ## Data and trust boundaries
 
-Source files remain where they are; the extension does not directly write them.
+Source files remain where they are. The canvas autosaves manual edits only to the opened Markdown file and flushes pending changes before posting feedback. These are local editor saves, not agent file-tool edits; Copilot's subsequent edits still use its normal tools, permissions, and conversation mode.
 Comments are stored as individual JSON files under `artifacts\` in the user extension directory,
 keyed by the canonical absolute document path, not a transient panel ID.
 These files include selected document text and feedback; they are gitignored.
@@ -178,7 +181,11 @@ npm ci --userconfig "$HOME\.npmrc"
 npm --userconfig "$HOME\.npmrc" run deploy:local
 ```
 
-Run `npm ci` initially or when dependencies need restoring, not before every deployment. Node.js 22+ is required. The command resolves its source from the script's location, builds the renderer, and runs unit tests before changing the installation. It uses the user-profile root `.npmrc` settings for npm subprocesses.
+Run `npm ci` initially or when dependencies need restoring, not before every deployment. Node.js 22.12.0+ is required. The command resolves its source from the script's location, builds the renderer, and runs unit tests before changing the installation. It uses the user-profile root `.npmrc` settings for npm subprocesses.
+
+Dependabot checks the root npm dependencies weekly using `.github/dependabot.yml`, with a seven-day cooldown for new releases.
+
+The configured npm feed does not yet provide Markdown-it 14.3.3. While retaining the feed-supported dependency, `markdown-reference.mjs` backports the upstream reference-parser fix for GHSA-gfr2-rv44-r23c and replaces that rule in every review rendering/source-mapping operation. Raw HTML remains disabled, preventing the separate inline-HTML parsing issue. npm audit still reports the installed package version because it cannot recognize application-level backports; the finding is not suppressed. Remove the backport after upgrading to a patched release available through the feed.
 
 The destination is `$HOME\.copilot\extensions\markdown-comments`, or `$env:COPILOT_HOME\extensions\markdown-comments` when `COPILOT_HOME` is set. A linked or junction-backed Copilot home is resolved to its physical location. The source and destination must not overlap; run this command from a separate checkout/worktree, not from a clone already inside that installation directory. Symlinks and junctions within the resolved extension destination are rejected.
 
@@ -200,7 +207,7 @@ npx --userconfig "$HOME\.npmrc" playwright install chromium
 
 `npm run check` builds and runs both test suites. Browser tests use a local test document and a mock message sender; they do not call a model. Build first when running browser tests separately after renderer changes.
 
-`extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns source mapping, durable comments, configuration, and contextual requests; `server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI. Agent actions `refresh` and `list_comments` expose the open document's state.
+`extension.mjs` owns SDK registration and per-panel cleanup; `review.mjs` owns source mapping, revision-checked document saving, durable comments, configuration, and contextual requests; `server.mjs` serves the loopback API; `ui.mjs` renders the selection/comment UI; `editor.mjs` integrates Milkdown, source-block preservation, and transaction-mapped comment anchors. The renderer bundles both JavaScript and CSS; deployment includes both assets. Agent actions `refresh` and `list_comments` expose the saved document's state, not an unsaved browser draft.
 
 ## License
 
