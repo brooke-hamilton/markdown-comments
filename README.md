@@ -187,8 +187,6 @@ Run `npm ci` initially or when dependencies need restoring, not before every dep
 
 Dependabot checks the root npm dependencies weekly using `.github/dependabot.yml`, with a seven-day cooldown for new releases.
 
-The project `.npmrc` omits registry-specific tarball URLs from `package-lock.json` while retaining exact versions and integrity hashes. This lets Dependabot use the public npm registry instead of an environment-specific mirror, while local installs continue to use the registry configured in the user-profile `.npmrc`. npm resolves the tarball URLs during installation, which can require additional registry requests.
-
 The configured npm feed does not yet provide Markdown-it 14.3.3. While retaining the feed-supported dependency, `markdown-reference.mjs` backports the upstream reference-parser fix for GHSA-gfr2-rv44-r23c and replaces that rule in every review rendering/source-mapping operation. Raw HTML remains disabled, preventing the separate inline-HTML parsing issue. npm audit still reports the installed package version because it cannot recognize application-level backports; the finding is not suppressed. Remove the backport after upgrading to a patched release available through the feed.
 
 The destination is `$HOME\.copilot\extensions\markdown-comments`, or `$env:COPILOT_HOME\extensions\markdown-comments` when `COPILOT_HOME` is set. A linked or junction-backed Copilot home is resolved to its physical location. The source and destination must not overlap; run this command from a separate checkout/worktree, not from a clone already inside that installation directory. Symlinks and junctions within the resolved extension destination are rejected.
