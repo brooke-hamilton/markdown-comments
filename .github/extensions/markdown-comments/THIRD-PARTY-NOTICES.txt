@@ -896,7 +896,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/core@7.22.3 (MIT)
+@milkdown/core@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -921,7 +921,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/ctx@7.22.3 (MIT)
+@milkdown/ctx@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -946,7 +946,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/exception@7.22.3 (MIT)
+@milkdown/exception@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -971,7 +971,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/kit@7.22.3 (MIT)
+@milkdown/kit@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -996,7 +996,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/plugin-history@7.22.3 (MIT)
+@milkdown/plugin-history@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -1021,7 +1021,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/preset-commonmark@7.22.3 (MIT)
+@milkdown/preset-commonmark@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -1046,7 +1046,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/preset-gfm@7.22.3 (MIT)
+@milkdown/preset-gfm@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -1071,7 +1071,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/prose@7.22.3 (MIT)
+@milkdown/prose@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -1096,7 +1096,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/transformer@7.22.3 (MIT)
+@milkdown/transformer@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -1121,7 +1121,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-@milkdown/utils@7.22.3 (MIT)
+@milkdown/utils@7.23.0 (MIT)
 
 The MIT License (MIT)
 
@@ -3755,7 +3755,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-mdast-util-find-and-replace@3.0.3 (MIT)
+mdast-util-find-and-replace@3.0.4 (MIT)
 
 (The MIT License)
 
@@ -3990,7 +3990,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-mdast-util-to-markdown@2.2.0 (MIT)
+mdast-util-to-markdown@2.2.1 (MIT)
 
 (The MIT License)
 
@@ -5074,7 +5074,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
-prosemirror-transform@1.12.2 (MIT)
+prosemirror-transform@1.12.4 (MIT)
 
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -5097,7 +5097,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
-prosemirror-view@1.42.6 (MIT)
+prosemirror-view@1.42.8 (MIT)
 
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -5498,11 +5498,11 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-unist-util-visit@5.1.0 (MIT)
+unist-util-visit@5.2.0 (MIT)
 
 (The MIT License)
 
-Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -5524,11 +5524,11 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-unist-util-visit-parents@6.0.2 (MIT)
+unist-util-visit-parents@6.1.0 (MIT)
 
 (The MIT License)
 
-Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
